@@ -1,32 +1,29 @@
-""""Was this transaction initiated by you?" – the account owner's YES/NO on a
-held payment, its expiry policy, and the manual (SIMULATED) attacker details
-typed into the Frauder console."""
+"""Every fraud-flagged payment waits for its owner: "Security Verification
+Required – did you initiate this transaction?". YES authorizes it, NO blocks it,
+no answer lets it EXPIRE. Plus the manual (SIMULATED) attacker details typed
+into the Frauder console."""
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import text
 
 from portal.extensions import db
-from portal.models import Alert, SystemSetting, Transaction, User, now
+from portal.models import Alert, FraudRule, SystemSetting, Transaction, User, now
 
 from .conftest import balance, login, send
 from .test_frauder import OPENING, fr, rules  # noqa: F401  (fr is a fixture)
 
-DENIED_REASON = 'Transaction blocked because the account owner denied initiating this payment.'
+DENIED_REASON = 'Account owner denied initiating this transaction.'
+YES_MESSAGE = 'Transaction successfully authorized. The amount has been transferred to the Receiver.'
+NO_MESSAGE = ('Transaction blocked successfully. You reported that this transaction was not initiated by you. '
+              'No money has been transferred.')
+EMAILS = {'rahul': 'rahul@demo.bank', 'suresh': 'suresh@demo.bank', 'priya': 'priya@demo.bank',
+          'amit': 'amit@demo.bank', 'quickcash': 'quickcash@demo.bank'}
 
 
-def _otp(client, headers, txn_id, response='YES'):
-    res = client.post(f'/api/transactions/{txn_id}/confirmation', headers=headers, json={'response': response})
-    assert res.status_code == 200, res.get_json()
-    return res.get_json()['data']['verification']['simulated_sms'].split('OTP ')[1][:6]
-
-
-def _verify(client, headers, txn_id, password='Rahul@123'):
-    otp = _otp(client, headers, txn_id)
-    res = client.post(f'/api/transactions/{txn_id}/verification/confirm', headers=headers,
-                      json={'otp': otp, 'password': password})
-    assert res.status_code == 200, res.get_json()
-    return res.get_json()['data']
+def _answer(client, headers, txn_id, response):
+    return client.post(f'/api/transactions/{txn_id}/confirmation', headers=headers, json={'response': response})
 
 
 def _set(app, **settings):
@@ -52,6 +49,13 @@ def _expire_now(app, txn_id):
         db.session.remove()
 
 
+def _weight(app, code):
+    with app.app_context():
+        weight = FraudRule.query.filter_by(code=code).one().weight
+        db.session.remove()
+        return weight
+
+
 def _example_attempt(client, app, fr):
     """The viva example: Rahul's account, a different city, an unknown device, ₹80,000 to Priya."""
     rahul = login(client, 'rahul@demo.bank')
@@ -61,46 +65,177 @@ def _example_attempt(client, app, fr):
     result = fr.transfer(80000, device='ATK-PHONE-01', city='delhi', ip='49.36.12.8',
                          target_location='Connaught Place', scenario='ATO')
     assert rules(result) == {'R1', 'R4'} and result['status'] == 'UNDER_REVIEW', rules(result)
-    assert result['confirmation']['status'] == 'PENDING'
-    assert result['outcome_label'] == 'AWAITING USER CONFIRMATION'
+    assert result['confirmation']['status'] == 'PENDING' and result['display_status'] == 'USER_CONFIRMATION_PENDING'
+    assert result['outcome_label'] == 'USER CONFIRMATION PENDING'
     return rahul, result
 
 
-# ── 1. YES + verification → SUCCESSFUL ──────────────────────────────────────
+# ── Each of the nine rules on its own: held → YES pays / NO blocks ──────────
 
-def test_yes_with_verification_completes_payment(client, app, fr):
+def _trigger_r9(fr):
+    for _ in range(3):
+        fr.login('WRONG_PASSWORD', device='ATK-R9', city='hyderabad')
+    device = fr.login('STOLEN_PASSWORD', device='ATK-R9', city='hyderabad')['device_id']
+    return fr.transfer(6000, receiver='amit', device=str(device), city='hyderabad')
+
+
+def _trigger_r1(fr, client):
+    rahul = login(client, 'rahul@demo.bank')
+    for amount in (500, 1000, 1500):
+        send(client, rahul, amount)
+    return fr.transfer(8000)
+
+
+TRIGGERS = {   # rule → (victim, receiver, how the Frauder triggers it by hand)
+    'R1': ('rahul', 'priya', _trigger_r1),
+    'R2': ('rahul', 'priya', lambda fr, c: [fr.transfer(200) for _ in range(6)][-1]),
+    'R3': ('rahul', 'amit', lambda fr, c: [fr.transfer(500, receiver='amit', city=city)
+                                           for city in ('mumbai', 'delhi')][-1]),
+    'R4': ('rahul', 'priya', lambda fr, c: fr.transfer(30000, device='new')),
+    'R5': ('rahul', 'priya', lambda fr, c: fr.transfer(12000, demo_time='02:30')),
+    'R6': ('rahul', 'quickcash', lambda fr, c: fr.transfer(2000, receiver='quickcash')),
+    'R7': ('rahul', 'amit', lambda fr, c: [fr.transfer(46000, receiver='amit') for _ in range(3)][-1]),
+    'R8': ('suresh', 'priya', lambda fr, c: fr.transfer(30000, victim='suresh')),
+    'R9': ('rahul', 'amit', lambda fr, c: _trigger_r9(fr)),
+}
+
+
+@pytest.mark.parametrize('answer', ['YES', 'NO'])
+@pytest.mark.parametrize('code', sorted(TRIGGERS))
+def test_each_rule_alone_waits_for_the_owner(client, app, fr, code, answer):
+    victim, receiver, trigger = TRIGGERS[code]
+    owner_email, receiver_email = EMAILS[victim], EMAILS[receiver]
+    # Balances just before the flagged attempt (earlier set-up payments complete normally).
+    before = {}
+
+    def snapshot():
+        before.update({e: balance(app, e) for e in (owner_email, receiver_email)})
+    attempt = trigger(_Snap(fr, snapshot), client)
+
+    assert rules(attempt) == {code}, rules(attempt)
+    assert attempt['risk_score'] == _weight(app, code)                       # the actual weighted score
+    assert attempt['status'] == 'UNDER_REVIEW' and attempt['display_status'] == 'USER_CONFIRMATION_PENDING'
+    assert attempt['money_moved'] is False
+    assert {e: balance(app, e) for e in before} == before                    # nothing moved yet
+
+    owner = login(client, owner_email)
+    cards = client.get('/api/user/dashboard', headers=owner).get_json()['data']['pending_confirmations']
+    card = next(c for c in cards if c['id'] == attempt['id'])
+    assert card['risk_score'] == attempt['risk_score'] and card['rules'][0]['code'] == code
+
+    res = _answer(client, owner, attempt['id'], answer)
+    body = res.get_json()
+    assert res.status_code == 200, body
+    txn = body['data']['transaction']
+    amount = Decimal(str(attempt['amount']))
+    if answer == 'YES':
+        assert body['message'] == YES_MESSAGE and txn['display_status'] == 'SUCCESSFUL'
+        assert txn['outcome_label'] == 'USER AUTHORIZED – PAYMENT SUCCESSFUL'
+        assert balance(app, owner_email) == before[owner_email] - amount
+        assert balance(app, receiver_email) == before[receiver_email] + amount
+    else:
+        assert body['message'] == NO_MESSAGE and txn['status'] == 'BLOCKED'
+        assert txn['outcome_label'] == 'USER DENIED – PAYMENT BLOCKED' and txn['final_reason'] == DENIED_REASON
+        assert {e: balance(app, e) for e in before} == before
+    assert txn['risk_score'] == attempt['risk_score']                        # preserved for investigation
+    frauder = client.get(f"/api/frauder/transactions/{attempt['id']}", headers=fr.headers).get_json()['data']
+    assert frauder['outcome_label'] == txn['outcome_label']
+
+
+class _Snap:
+    """Wraps the Frauder helper so the balance snapshot is taken right before
+    the last (flagged) transfer of each trigger sequence."""
+    def __init__(self, fr, snapshot):
+        self._fr, self._snapshot = fr, snapshot
+
+    def transfer(self, *args, **kwargs):
+        self._snapshot()
+        return self._fr.transfer(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._fr, name)
+
+
+def test_multiple_rules_still_wait_for_the_owner(client, app, fr):
+    for _ in range(3):
+        fr.login('WRONG_PASSWORD', device='ATK-MULTI', city='hyderabad')
+    device = fr.login('STOLEN_PASSWORD', device='ATK-MULTI', city='hyderabad')['device_id']
+    attempt = fr.transfer(80000, receiver='quickcash', device=str(device), city='hyderabad')
+    assert {'R4', 'R6', 'R9'} <= rules(attempt) and attempt['risk_score'] == 100
+    assert attempt['decision'] == 'BLOCKED' and attempt['display_status'] == 'USER_CONFIRMATION_PENDING'
+    rahul = login(client, 'rahul@demo.bank')
+    assert _answer(client, rahul, attempt['id'], 'YES').get_json()['data']['outcome'] == 'authorized'
+    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank'] - 80000
+    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank'] + 80000
+
+
+def test_frauder_attempt_without_rules_is_still_held(app, fr):
+    attempt = fr.transfer(1500)
+    assert rules(attempt) == set() and attempt['risk_score'] == 0
+    assert attempt['display_status'] == 'USER_CONFIRMATION_PENDING' and attempt['money_moved'] is False
+    assert "not made from the owner's own banking session" in attempt['risk_explanation']
+    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
+
+
+def test_genuine_payment_without_rules_completes_normally(client, app):
+    data = send(client, login(client, 'rahul@demo.bank'), 1500).get_json()['data']
+    assert data['display_status'] == 'SUCCESSFUL' and data['confirmation'] is None
+
+
+def test_no_blocks_the_attacker_device_and_ip(client, app, fr):
+    attempt = fr.transfer(1500, device='ATK-BAD', ip='49.36.12.50')
+    _answer(client, login(client, 'rahul@demo.bank'), attempt['id'], 'NO')
+    again = fr.transfer(1500, device='ATK-BAD', ip='49.36.12.50')
+    r6 = next(t for t in again['rule_trace'] if t['code'] == 'R6')
+    assert r6['status'] == 'TRIGGERED' and '49.36.12.50' in r6['observed']
+
+
+# ── The notification, and every dashboard agreeing ─────────────────────────
+
+def test_security_notification_until_answered(client, app, fr):
     rahul, attempt = _example_attempt(client, app, fr)
     card = client.get('/api/user/dashboard', headers=rahul).get_json()['data']['pending_confirmations'][0]
     assert card['id'] == attempt['id'] and card['amount'] == 80000 and card['receiver']['name'].startswith('Priya')
     assert card['device_name'] == 'Android phone #ATK-PHONE-01' and card['ip_address'] == '49.36.12.8'
-    assert card['city'] == 'Delhi' and card['risk_explanation'] and card['txn_ref']
+    assert card['risk_score'] == 50 and {r['code'] for r in card['rules']} == {'R1', 'R4'}
+    assert all(r['name'] and r['reason'] for r in card['rules']) and card['risk_explanation'] and card['txn_ref']
 
+    def notice():
+        items = client.get('/api/notifications', headers=rahul).get_json()['data']['items']
+        return next(n for n in items if n['title'] == 'Security Verification Required')
+    assert notice()['is_read'] is False and 'Please confirm whether you initiated' in notice()['message']
+    _answer(client, rahul, attempt['id'], 'YES')
+    assert notice()['is_read'] is True
+
+
+def test_yes_completes_payment_and_receiver_sees_it(client, app, fr):
+    rahul, attempt = _example_attempt(client, app, fr)
     before_rahul, before_priya = balance(app, 'rahul@demo.bank'), balance(app, 'priya@demo.bank')
-    result = _verify(client, rahul, attempt['id'])
-    assert result['outcome'] == 'released' and [m['code'] for m in result['mitigations']] == ['R4']
-    assert [h['code'] for h in result['hits']] == ['R1']          # re-evaluated, not bypassed
-    txn = result['transaction']
-    assert txn['status'] == 'COMPLETED' and txn['outcome_label'] == 'USER CONFIRMED – SUCCESSFUL'
-    assert txn['confirmation']['response'] == 'YES' and 'Approved after the account owner' in txn['final_reason']
+    body = _answer(client, rahul, attempt['id'], 'YES').get_json()
+    txn = body['data']['transaction']
+    assert body['message'] == YES_MESSAGE and txn['status'] == 'COMPLETED'
+    assert txn['confirmation']['response'] == 'YES' and txn['confirmation']['responded_at']
+    assert 'authorized by the account owner' in txn['final_reason']
     assert balance(app, 'rahul@demo.bank') == before_rahul - 80000
     assert balance(app, 'priya@demo.bank') == before_priya + 80000
 
     priya = client.get('/api/receiver/payments', headers=login(client, 'priya@demo.bank')).get_json()['data']['items']
     assert priya[0]['id'] == attempt['id'] and priya[0]['credited'] is True
-    notes = client.get('/api/notifications', headers=rahul).get_json()['data']['items']
-    assert any(n['title'] == 'Payment successful' for n in notes)
+    titles = [n['title'] for n in client.get('/api/notifications', headers=rahul).get_json()['data']['items']]
+    assert 'Payment successful' in titles
+    analyst = login(client, 'analyst@demo.bank')
+    shown = client.get(f"/api/detection/transactions/{attempt['id']}", headers=analyst).get_json()['data']
+    assert shown['outcome_label'] == 'USER AUTHORIZED – PAYMENT SUCCESSFUL' and shown['risk_score'] == 50
 
-
-# ── 2. NO → BLOCKED at once ─────────────────────────────────────────────────
 
 def test_no_blocks_immediately_and_every_dashboard_agrees(client, app, fr):
     rahul, attempt = _example_attempt(client, app, fr)
     before_rahul, before_priya = balance(app, 'rahul@demo.bank'), balance(app, 'priya@demo.bank')
-    res = client.post(f"/api/transactions/{attempt['id']}/confirmation", headers=rahul, json={'response': 'no'})
-    assert res.status_code == 200
+    res = _answer(client, rahul, attempt['id'], 'no')
+    assert res.status_code == 200 and res.get_json()['message'] == NO_MESSAGE
     txn = res.get_json()['data']['transaction']
     assert txn['status'] == 'BLOCKED' and txn['final_reason'] == DENIED_REASON
-    assert txn['outcome_label'] == 'USER DENIED – BLOCKED' and txn['money_moved'] is False
+    assert txn['outcome_label'] == 'USER DENIED – PAYMENT BLOCKED' and txn['money_moved'] is False
     assert balance(app, 'rahul@demo.bank') == before_rahul and balance(app, 'priya@demo.bank') == before_priya
 
     with app.app_context():
@@ -115,9 +250,10 @@ def test_no_blocks_immediately_and_every_dashboard_agrees(client, app, fr):
     confirmations = client.get('/api/detection/confirmations', headers=analyst).get_json()['data']
     frauder = client.get('/api/frauder/attempts', headers=fr.headers).get_json()['data']
     shown = next(t for t in detection if t['id'] == attempt['id'])
-    assert shown['outcome_label'] == 'USER DENIED – BLOCKED' and shown['confirmation']['response'] == 'NO'
+    assert shown['outcome_label'] == 'USER DENIED – PAYMENT BLOCKED' and shown['confirmation']['response'] == 'NO'
     assert confirmations['recent'][0]['id'] == attempt['id'] and confirmations['counts']['no'] == 1
-    assert frauder[0]['transaction_id'] == attempt['id'] and frauder[0]['outcome_label'] == 'USER DENIED – BLOCKED'
+    assert frauder[0]['transaction_id'] == attempt['id']
+    assert frauder[0]['outcome_label'] == 'USER DENIED – PAYMENT BLOCKED'
     priya = client.get('/api/receiver/payments', headers=login(client, 'priya@demo.bank')).get_json()['data']['items']
     assert attempt['id'] not in [t['id'] for t in priya]          # never shown as received money
     result = client.get(f"/api/frauder/transactions/{attempt['id']}", headers=fr.headers).get_json()['data']
@@ -125,18 +261,34 @@ def test_no_blocks_immediately_and_every_dashboard_agrees(client, app, fr):
     assert 'Confirmation requested from Rahul' in labels and 'Rahul answered NO' in labels
 
 
-# ── 3. No answer → never approved ───────────────────────────────────────────
+def test_receiver_never_sees_a_pending_payment(client, fr):
+    attempt = fr.transfer(30000, device='new')
+    priya = login(client, 'priya@demo.bank')
+    assert attempt['id'] not in [t['id'] for t in
+                                 client.get('/api/receiver/payments', headers=priya).get_json()['data']['items']]
 
-def test_unanswered_confirmation_is_blocked_on_expiry(client, app, fr):
+
+# ── No answer → EXPIRED, never authorized ───────────────────────────────────
+
+def test_unanswered_confirmation_expires(client, app, fr):
     attempt = fr.transfer(2000, receiver='quickcash')
     _expire_now(app, attempt['id'])
     rahul = login(client, 'rahul@demo.bank')
     data = client.get('/api/user/dashboard', headers=rahul).get_json()['data']
     assert data['pending_confirmations'] == []
     txn = client.get(f"/api/user/transactions/{attempt['id']}", headers=rahul).get_json()['data']
-    assert txn['status'] == 'BLOCKED' and txn['outcome_label'] == 'NO RESPONSE – BLOCKED'
-    assert 'did not confirm it within 30 minutes' in txn['final_reason']
+    assert txn['status'] == 'EXPIRED' and txn['outcome_label'] == 'EXPIRED – NOT AUTHORIZED'
+    assert 'did not respond within 30 minutes' in txn['final_reason']
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
+    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
+
+
+def test_block_policy_on_expiry(client, app, fr):
+    _set(app, CONFIRMATION_EXPIRY_ACTION='BLOCK')
+    attempt = fr.transfer(2000, receiver='quickcash')
+    _expire_now(app, attempt['id'])
+    result = client.get(f"/api/frauder/transactions/{attempt['id']}", headers=fr.headers).get_json()['data']
+    assert result['status'] == 'BLOCKED' and result['outcome_label'] == 'NO RESPONSE – BLOCKED'
 
 
 def test_hold_policy_on_expiry_still_never_approves(client, app, fr):
@@ -148,14 +300,13 @@ def test_hold_policy_on_expiry_still_never_approves(client, app, fr):
     assert result['confirmation']['status'] == 'EXPIRED' and result['money_moved'] is False
 
 
-# ── 4–6. Who may answer, and only once, and only in time ────────────────────
+# ── Who may answer, and only once, and only in time ─────────────────────────
 
 def test_only_the_owner_can_answer(client, app, fr):
     attempt = fr.transfer(2000, receiver='quickcash')
     url = f"/api/transactions/{attempt['id']}/confirmation"
     karan = login(client, 'karan@demo.bank')
     assert client.post(url, headers=karan, json={'response': 'NO'}).status_code == 404
-    assert client.post(f"/api/transactions/{attempt['id']}/verification/start", headers=karan).status_code == 404
     for email in ('priya@demo.bank', 'analyst@demo.bank', 'frauder@demo.bank'):
         assert client.post(url, headers=login(client, email), json={'response': 'YES'}).status_code == 403
     assert client.post(url, json={'response': 'YES'}).status_code == 401
@@ -165,9 +316,10 @@ def test_only_the_owner_can_answer(client, app, fr):
     assert client.post(url, headers=karan, json={'response': 'YES', 'user_id': fr.ids['rahul']}).status_code == 404
     assert client.get('/api/transactions/confirmations', headers=rahul).get_json()['data'][0]['id'] == attempt['id']
     assert client.get('/api/transactions/confirmations', headers=karan).get_json()['data'] == []
+    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
 
 
-def test_duplicate_answers_are_rejected(client, app, fr):
+def test_duplicate_answers_are_rejected_and_money_moves_once(client, app, fr):
     rahul = login(client, 'rahul@demo.bank')
     first = fr.transfer(2000, receiver='quickcash')
     url = f"/api/transactions/{first['id']}/confirmation"
@@ -182,43 +334,44 @@ def test_duplicate_answers_are_rejected(client, app, fr):
     for answer in ('YES', 'NO'):
         assert client.post(url, headers=rahul, json={'response': answer}).status_code == 409
     assert client.post(f"/api/transactions/{first['id']}/report-fraud", headers=rahul).status_code == 409
+    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank'] - 2000      # debited exactly once
+    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank'] + 2000
 
 
 def test_answer_after_expiry_is_rejected(client, app, fr):
     attempt = fr.transfer(2000, receiver='quickcash')
     _expire_now(app, attempt['id'])
     rahul = login(client, 'rahul@demo.bank')
-    res = client.post(f"/api/transactions/{attempt['id']}/confirmation", headers=rahul, json={'response': 'YES'})
+    res = _answer(client, rahul, attempt['id'], 'YES')
     assert res.status_code == 410 and res.get_json()['error']['code'] == 'CONFIRMATION_EXPIRED'
-    again = client.post(f"/api/transactions/{attempt['id']}/confirmation", headers=rahul, json={'response': 'YES'})
-    assert again.status_code == 410
+    assert _answer(client, rahul, attempt['id'], 'YES').status_code == 410
     assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
 
 
-# ── 7. YES cannot override a hard-block condition ───────────────────────────
-
-def test_yes_on_hard_block_rule_stays_blocked(client, app, fr):
-    attempt = fr.transfer(2000, receiver='quickcash')             # R6 alone → REVIEW
-    assert rules(attempt) == {'R6'} and attempt['status'] == 'UNDER_REVIEW'
-    rahul = login(client, 'rahul@demo.bank')
-    result = _verify(client, rahul, attempt['id'])
-    txn = result['transaction']
-    assert result['outcome'] == 'blocked' and txn['status'] == 'BLOCKED'
-    assert txn['outcome_label'] == 'USER CONFIRMED – STILL BLOCKED'
-    assert 'hard-block condition (R6)' in txn['final_reason']
-    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
-    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
+def test_yes_with_insufficient_balance_is_explained_not_processed(client, app, fr):
+    attempt = fr.transfer(30000, device='new')
+    with app.app_context():
+        User.query.filter_by(email='rahul@demo.bank').one().primary_account.balance = Decimal('100')
+        db.session.commit()
+        db.session.remove()
+    body = _answer(client, login(client, 'rahul@demo.bank'), attempt['id'], 'YES').get_json()['data']
+    assert body['outcome'] == 'blocked' and body['transaction']['status'] == 'BLOCKED'
+    assert 'lower than the amount' in body['transaction']['final_reason']
+    assert balance(app, 'rahul@demo.bank') == Decimal('100')
+    assert balance(app, 'priya@demo.bank') == OPENING['priya@demo.bank']
 
 
-def test_yes_that_still_scores_review_goes_to_analyst(client, app, fr):
-    _set(app, CONFIRMATION_HARD_BLOCK_RULES='')
+def test_frauder_cannot_answer_or_change_the_confirmation(client, app, fr):
     attempt = fr.transfer(2000, receiver='quickcash')
-    result = _verify(client, login(client, 'rahul@demo.bank'), attempt['id'])
-    assert result['outcome'] == 'escalated' and result['transaction']['outcome_label'] == 'WITH FRAUD TEAM'
-    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
+    url = f"/api/transactions/{attempt['id']}/confirmation"
+    assert client.post(url, headers=fr.headers, json={'response': 'YES'}).status_code == 403
+    assert client.post(f"/api/transactions/{attempt['id']}/report-fraud", headers=fr.headers).status_code == 403
+    with app.app_context():
+        assert db.session.get(Transaction, attempt['id']).confirmation_status == 'PENDING'
+        db.session.remove()
 
 
-# ── 8. Manually typed attacker details ──────────────────────────────────────
+# ── Manually typed attacker details ─────────────────────────────────────────
 
 def test_manual_details_are_stored_unchanged_and_used_by_rules(client, app, fr):
     result = fr.transfer(1200, device='ATK-77', city='delhi', ip='49.36.12.8', target_location='Karol Bagh',
@@ -265,21 +418,32 @@ def test_manual_details_are_validated(client, fr):
 def test_context_fills_nothing_in(client, fr):
     ctx = client.get('/api/frauder/context', headers=fr.headers).get_json()['data']
     assert {'cities', 'device_types', 'scenarios', 'policy'} <= set(ctx)
-    assert ctx['policy'] == {'confirmation_expiry_minutes': 30, 'expiry_action': 'BLOCK', 'hard_block_rules': ['R6']}
+    assert ctx['policy'] == {'confirmation_expiry_minutes': 30, 'expiry_action': 'EXPIRE', 'hard_block_rules': []}
     guide = client.get('/api/frauder/rule-guide', headers=fr.headers).get_json()['data']
     assert all('preset' not in g for g in guide)
 
-
-# ── 9–10. Balances stay consistent ──────────────────────────────────────────
 
 def test_total_money_is_conserved_across_yes_and_no(client, app, fr):
     accounts = ('rahul@demo.bank', 'priya@demo.bank')
     total = sum(balance(app, a) for a in accounts)
     rahul, attempt = _example_attempt(client, app, fr)
-    client.post(f"/api/transactions/{attempt['id']}/confirmation", headers=rahul, json={'response': 'NO'})
-    _age_history(app)
+    _answer(client, rahul, attempt['id'], 'NO')
     second = fr.transfer(80000, device='ATK-PHONE-02', city='delhi', ip='49.36.12.9')
     assert second['status'] == 'UNDER_REVIEW'
-    _verify(client, rahul, second['id'])
+    _answer(client, rahul, second['id'], 'YES')
     assert sum(balance(app, a) for a in accounts) == total
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank'] - Decimal('3000') - 80000
+
+
+def test_security_notice_stays_open_until_answered(client, app, fr):
+    attempt = fr.transfer(30000, device='new')
+    rahul = login(client, 'rahul@demo.bank')
+
+    def notice():
+        items = client.get('/api/notifications', headers=rahul).get_json()['data']['items']
+        return next(n for n in items if n['title'] == 'Security Verification Required')
+    client.post(f"/api/notifications/{notice()['id']}/read", headers=rahul)
+    client.post('/api/notifications/read-all', headers=rahul)
+    assert notice()['is_read'] is False                          # still waiting for YES/NO
+    _answer(client, rahul, attempt['id'], 'NO')
+    assert notice()['is_read'] is True

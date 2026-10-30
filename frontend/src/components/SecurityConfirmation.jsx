@@ -2,25 +2,22 @@ import { useState } from 'react';
 import { errorMessage, post } from '../api/client';
 import { dateTime, money, timeOnly } from '../utils/format';
 import { useToast } from './Toast';
-import { RuleChips } from './ui';
-import VerifyPaymentModal from './VerifyPaymentModal';
+import { RiskScore } from './ui';
 
 const minutesLeft = (iso) => Math.max(0, Math.ceil((new Date(iso) - Date.now()) / 60000));
 
-/** "Security Alert: Was this transaction initiated by you?" – one card per held
- *  payment. The answer is checked on the server (owner, expiry, duplicates);
- *  YES leads to OTP + password and a full re-check, NO blocks immediately. */
-export default function SecurityConfirmation({ items, onChange }) {
+/** Answers one held payment. The server checks owner, expiry and duplicates;
+ *  YES authorizes (after re-validating balance and accounts), NO blocks. */
+export function useConfirmationAnswer(onChange) {
   const toast = useToast();
   const [busy, setBusy] = useState(null);
-  const [verifying, setVerifying] = useState(null);
-
   const answer = async (txn, response) => {
     setBusy(`${txn.id}-${response}`);
     try {
       const res = await post(`/transactions/${txn.id}/confirmation`, { response });
-      if (response === 'NO') toast(res.message, 'success', 'Payment blocked');
-      else setVerifying({ txn: res.data.transaction, challenge: res.data.verification });
+      const ok = res.data.outcome === 'authorized' || response === 'NO';
+      toast(res.message, ok ? 'success' : 'error',
+            response === 'NO' ? 'Payment blocked' : ok ? 'Payment successful' : 'Payment not processed');
     } catch (e) {
       toast(errorMessage(e), 'error');
     } finally {
@@ -28,12 +25,17 @@ export default function SecurityConfirmation({ items, onChange }) {
       onChange?.();
     }
   };
+  return { answer, busy };
+}
+
+/** "Security Verification Required" – one card per payment flagged by any fraud rule. */
+export default function SecurityConfirmation({ items, onChange }) {
+  const { answer, busy } = useConfirmationAnswer(onChange);
 
   if (!items?.length) return null;
   return (
     <div className="stack" style={{ marginBottom: 16 }}>
       {items.map((t) => {
-        const saidYes = t.confirmation?.response === 'YES';
         const left = t.confirmation?.expires_at ? minutesLeft(t.confirmation.expires_at) : null;
         return (
           <div className="security-alert" key={t.id} role="alert">
@@ -41,12 +43,13 @@ export default function SecurityConfirmation({ items, onChange }) {
               <div className="security-alert-icon">🔐</div>
               <div style={{ flex: 1 }}>
                 <div className="row-between wrap">
-                  <h2>Security Alert: Was this transaction initiated by you?</h2>
+                  <h2>Security Verification Required</h2>
                   {t.is_simulated && <span className="badge b-purple">Frauder attempt (demo)</span>}
                 </div>
+                <p className="mt-8">A transaction is being attempted from your account. Please confirm whether you initiated this transaction.</p>
                 <p className="small muted mt-8">
-                  This payment is on hold and nothing has been debited.
-                  {left != null && <> Answer by <span className="expiry-chip">{timeOnly(t.confirmation.expires_at)} ({left} min left)</span> – unanswered payments are never approved.</>}
+                  Nothing has been debited yet.
+                  {left != null && <> Answer by <span className="expiry-chip">{timeOnly(t.confirmation.expires_at)} ({left} min left)</span> – if you don't answer, the payment expires and is never sent.</>}
                 </p>
               </div>
             </div>
@@ -56,36 +59,33 @@ export default function SecurityConfirmation({ items, onChange }) {
               <dt>Receiver</dt><dd>{t.receiver.name} · <span className="mono">{t.receiver.upi_id}</span></dd>
               <dt>Transaction ID</dt><dd className="mono">{t.txn_ref}</dd>
               <dt>Date & time</dt><dd>{dateTime(t.txn_time)}</dd>
-              <dt>Device</dt><dd>{t.device_name || 'Not available'}{t.ip_address && <span className="muted"> · IP <span className="mono">{t.ip_address}</span></span>}</dd>
-              <dt>Location</dt><dd>{[t.target_location, t.city].filter(Boolean).join(', ') || 'Not available'}</dd>
-              <dt>Why flagged</dt><dd>{t.risk_explanation} <span style={{ marginLeft: 4 }}><RuleChips rules={t.rules} /></span></dd>
+              {(t.device_name || t.ip_address) && <><dt>Device</dt><dd>{t.device_name || 'Not available'}{t.ip_address && <span className="muted"> · IP <span className="mono">{t.ip_address}</span></span>}</dd></>}
+              {(t.target_location || t.city) && <><dt>Location</dt><dd>{[t.target_location, t.city].filter(Boolean).join(', ')}</dd></>}
+              <dt>Risk score</dt><dd><RiskScore score={t.risk_score} /> <span className="small muted">/ 100</span></dd>
+              <dt>Why flagged</dt><dd>{t.risk_explanation}</dd>
             </dl>
 
-            {saidYes ? (
-              <div className="notice notice-info mt-16 row-between wrap">
-                <span>You answered <strong>YES</strong>. Enter the OTP and your password to finish – every fraud rule is then checked again.</span>
-                <button className="btn btn-primary btn-sm" onClick={() => setVerifying({ txn: t })}>Enter OTP</button>
-              </div>
-            ) : (
-              <>
-                <div className="security-alert-actions">
-                  <button className="btn btn-success" disabled={!!busy} onClick={() => answer(t, 'YES')}>
-                    {busy === `${t.id}-YES` ? 'Sending OTP…' : '✓ YES, IT WAS ME'}
-                  </button>
-                  <button className="btn btn-danger" disabled={!!busy} onClick={() => answer(t, 'NO')}>
-                    {busy === `${t.id}-NO` ? 'Blocking…' : '✕ NO, NOT ME'}
-                  </button>
-                </div>
-                <p className="small muted mt-8">YES does not approve the payment by itself: you verify with an OTP and your password, then the fraud engine re-checks it. NO blocks it immediately and alerts our fraud team.</p>
-              </>
-            )}
+            <div className="mt-16">
+              <div className="small muted" style={{ marginBottom: 6 }}>Triggered fraud rules</div>
+              <ul className="rule-reasons">
+                {t.rules.map((r) => (
+                  <li key={r.code}><span className="badge b-amber">{r.code}</span> <strong>{r.name}</strong> – {r.reason}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="security-alert-actions">
+              <button className="btn btn-success" disabled={!!busy} onClick={() => answer(t, 'YES')}>
+                {busy === `${t.id}-YES` ? 'Authorizing…' : '✓ YES, I INITIATED THIS TRANSACTION'}
+              </button>
+              <button className="btn btn-danger" disabled={!!busy} onClick={() => answer(t, 'NO')}>
+                {busy === `${t.id}-NO` ? 'Blocking…' : '✕ NO, I DID NOT INITIATE THIS TRANSACTION'}
+              </button>
+            </div>
+            <p className="small muted mt-8">YES authorizes the payment: after a final balance and account check, the money is transferred. NO blocks it immediately, no money moves, and our fraud team is alerted.</p>
           </div>
         );
       })}
-      {verifying && (
-        <VerifyPaymentModal txn={verifying.txn} initialChallenge={verifying.challenge}
-                            onClose={() => { setVerifying(null); onChange?.(); }} onDone={onChange} />
-      )}
     </div>
   );
 }

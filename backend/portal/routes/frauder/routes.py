@@ -9,8 +9,8 @@ from portal.helpers.validators import json_body
 from . import bp
 
 OUTCOME_MESSAGES = {
-    'COMPLETED': 'Not stopped: the fraud engine approved this transfer and the money moved.',
-    'UNDER_REVIEW': 'Held: no money moved. The account owner has been asked "Was this transaction initiated by you?".',
+    'UNDER_REVIEW': 'USER CONFIRMATION PENDING: no money moved. The account owner has been asked to confirm '
+                    'whether they initiated this transaction.',
     'BLOCKED': 'Blocked: no money moved.',
 }
 

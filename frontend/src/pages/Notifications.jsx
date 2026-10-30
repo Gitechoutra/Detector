@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { errorMessage, post } from '../api/client';
 import { useToast } from '../components/Toast';
+import { useConfirmationAnswer } from '../components/SecurityConfirmation';
 import { Empty, ErrorNote, Loading, PageHead, Pagination } from '../components/ui';
 import { useApi } from '../hooks';
 import { timeAgo } from '../utils/format';
@@ -12,6 +13,7 @@ export default function Notifications() {
   const [page, setPage] = useState(1);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const { data, error, loading, reload } = useApi('/notifications', { page, unread: unreadOnly ? 1 : undefined }, { interval: 5000 });
+  const { answer, busy } = useConfirmationAnswer(() => reload(true));
 
   const markAll = async () => {
     try {
@@ -45,6 +47,12 @@ export default function Notifications() {
                   <div style={{ flex: 1 }}>
                     <div className="row-between"><strong>{n.title}</strong><span className="muted small nowrap">{timeAgo(n.created_at)}</span></div>
                     <div className={n.category === 'OTP' ? 'sms mt-8' : 'muted small'}>{n.message}</div>
+                    {n.title === 'Security Verification Required' && !n.is_read && n.transaction_id && (
+                      <div className="row wrap mt-8" onClick={(e) => e.stopPropagation()}>
+                        <button className="btn btn-success btn-sm" disabled={!!busy} onClick={() => answer({ id: n.transaction_id }, 'YES')}>✓ YES, I INITIATED THIS TRANSACTION</button>
+                        <button className="btn btn-danger btn-sm" disabled={!!busy} onClick={() => answer({ id: n.transaction_id }, 'NO')}>✕ NO, I DID NOT INITIATE THIS TRANSACTION</button>
+                      </div>
+                    )}
                   </div>
                   {!n.is_read && <span className="live-dot" style={{ background: 'var(--primary)', animation: 'none' }} />}
                 </div>

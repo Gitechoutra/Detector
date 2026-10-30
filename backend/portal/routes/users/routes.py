@@ -41,7 +41,7 @@ def dashboard():
         'user': user.to_dict(),
         'account': account.to_dict(),
         'stats': {'completed': stats.get('COMPLETED', 0), 'under_review': stats.get('UNDER_REVIEW', 0),
-                  'blocked': stats.get('BLOCKED', 0),
+                  'blocked': stats.get('BLOCKED', 0), 'expired': stats.get('EXPIRED', 0),
                   'declined': stats.get('DECLINED', 0) + stats.get('CANCELLED', 0),
                   'total_sent': float(total_sent)},
         'recent': [_with_direction(t, account.id) for t in recent],

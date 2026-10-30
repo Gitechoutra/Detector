@@ -9,6 +9,8 @@ const STATUS = {
   BLOCKED: ['Blocked', 'b-red'],
   DECLINED: ['Declined', 'b-red'],
   CANCELLED: ['Cancelled', 'b-slate'],
+  EXPIRED: ['Expired', 'b-slate'],
+  USER_CONFIRMATION_PENDING: ['Confirmation pending', 'b-amber'],
   PROCESSING: ['Processing', 'b-blue'],
   LOCKED: ['Account locked', 'b-red'],
   OPEN: ['Open', 'b-red'],
@@ -29,12 +31,12 @@ export function StatusBadge({ status, label }) {
   return <span className={`badge badge-dot ${cls}`}>{label || text}</span>;
 }
 
-/** The shared final-outcome label, e.g. "USER DENIED – BLOCKED" (same text on all four dashboards). */
+/** The shared final-outcome label, e.g. "USER DENIED – PAYMENT BLOCKED" (same text on all four dashboards). */
 export function OutcomeBadge({ label }) {
   if (!label) return null;
   const cls = label.includes('SUCCESSFUL') ? 'b-green'
     : label.includes('BLOCKED') || label === 'DECLINED' ? 'b-red'
-      : label === 'CANCELLED' ? 'b-slate' : 'b-amber';
+      : label === 'CANCELLED' || label.startsWith('EXPIRED') ? 'b-slate' : 'b-amber';
   return <span className={`badge badge-dot ${cls}`}>{label}</span>;
 }
 

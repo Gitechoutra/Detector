@@ -1,13 +1,17 @@
 # FraudShield – SQL-Based Real-Time Fraud Detection and Transaction Monitoring System
 
 Every payment is checked against nine SQL fraud rules the moment it is made. Each fired rule adds its
-weight to a risk score, `Risk = min(100, Σ weights)`, which decides the outcome:
+weight to a risk score, `Risk = min(100, Σ weights)`. The score and its band (0–39 low, 40–69 review,
+70–100 high) are recorded for investigation, but **the account owner makes the final decision**:
 
-| Score  | Decision | What happens |
-|--------|----------|--------------|
-| 0–39   | APPROVED | Money moves immediately; the receiver is credited |
-| 40–69  | REVIEW   | Payment held (nothing debited); customer step-up verification; medium alert |
-| 70–100 | BLOCKED  | Payment declined; high alert |
+| Situation | Status shown | What happens |
+|-----------|--------------|--------------|
+| No rule triggered (genuine payment by the owner) | SUCCESSFUL | Money moves immediately; the receiver is credited |
+| Any Frauder attempt, even with no rule triggered | USER_CONFIRMATION_PENDING | Never made by the owner, so always held for their YES/NO |
+| Any rule triggered (any score) | USER_CONFIRMATION_PENDING | Held, nothing debited; the owner gets "Security Verification Required" |
+| Owner answers YES | SUCCESSFUL | Re-validated (accounts, balance), then debited and credited |
+| Owner answers NO | BLOCKED | No money moves; HIGH alert |
+| No answer in 30 min | EXPIRED | Never authorized; no money moves |
 
 All payments are simulated. Nothing connects to a real bank, UPI, SMS or payment system.
 
@@ -85,13 +89,10 @@ open side by side.
 
 **User (manual).** Sends money by UPI ID, QR code (upload the receiver's QR image or paste its data) or
 bank transfer (account number + IFSC). Sees balance, history, status and the rules that flagged a payment.
-For REVIEW payments the user verifies with a simulated SMS OTP plus their password. The backend then
-**re-runs every rule**:
-- Only identity rules (R4 new device, R9 account takeover) can be cleared by verification.
-- Behavioural rules (amount, velocity, travel, watchlist, structuring, dormant, odd hour) still count.
-- If the new score is below 40 the payment is released. If it is still 40–69 it goes to a fraud analyst.
-  If it is 70 or more it is blocked.
-- Three wrong OTP/password attempts decline the payment.
+When any rule flags a payment, the user sees **Security Verification Required** with the amount,
+receiver, transaction ID, time, triggered rules, risk score and reason. They answer
+**YES, I INITIATED THIS TRANSACTION** (it is paid) or **NO, I DID NOT INITIATE THIS TRANSACTION** (it is
+blocked). See "Account-owner authorization" below.
 
 **Receiver (manual).** Sees incoming payments, sender, amount and status. Only approved payments are credited.
 Under-review and blocked payments are shown as *not credited*. The receiver can also show and download their
@@ -165,60 +166,65 @@ device, fires R4 + R6 + R9 (+ R1) = 100 → **Blocked**, with no money moved. At
 carry over: a burst of payments adds R2, and a change of city adds R3. Use **Reset fraud attempts** between
 rules to show each one on its own.
 
-**Account-owner confirmation ("Was this transaction initiated by you?").** Every payment the engine scores
-Review (40–69) opens a confirmation request for its owner.
+**Account-owner authorization ("Security Verification Required").** Any payment on which at least one
+rule fires is held (`USER_CONFIRMATION_PENDING`) and its owner is asked to confirm it. This happens even
+if only one rule fires and the score is low, or if the score is 100.
 
-- **The alert:** it appears prominently on the User dashboard with the amount, receiver, transaction ID, date
-  and time, device and IP, location and the reason it was flagged. It has two buttons:
-  **YES, IT WAS ME** and **NO, NOT ME**.
-- **NO:** the payment is BLOCKED at once with *"Transaction blocked because the account owner denied initiating
-  this payment."* No money moves. A HIGH `USER_DENIED` alert is raised and the attacker device is watch-listed.
-  The Frauder sees **USER DENIED – BLOCKED**.
-- **YES:** this never approves on its own.
-  - The owner verifies with an OTP and their password, then every rule is re-evaluated.
-  - Only the identity rules (R4, R9) are cleared by the verification.
-  - If the payment now scores Approved, money moves (**USER CONFIRMED – SUCCESSFUL**).
-  - If it still scores Review, it goes to a fraud analyst.
-  - If a hard-block rule still fires (default R6, a watch-listed receiver), it stays **BLOCKED**.
+- **The notification:** it appears prominently on the User dashboard, on the Send money result, and in the
+  notification centre until it is answered or expires. It shows the amount, receiver, transaction ID, date
+  and time, device, IP and location, the triggered rules, the risk score and the reason.
+- **YES** (authorization, not a bypass): the server checks that the logged-in user owns the payment, that the
+  request is still pending and not expired, and records the answer and time. It then locks both accounts
+  and re-validates them: both accounts active, enough balance, and no absolute restriction. If everything
+  passes, the sender is debited and the receiver credited exactly once. The status becomes SUCCESSFUL
+  (**USER AUTHORIZED – PAYMENT SUCCESSFUL**) and both sides are notified. Message: *"Transaction
+  successfully authorized. The amount has been transferred to the Receiver."* If a check fails (for
+  example insufficient balance), it is BLOCKED with the reason, and no money moves.
+- **NO** (also blocks the attacker: their device and public IP are watch-listed, so the next attempt from them fires R6): BLOCKED immediately with reason *"Account owner denied initiating this transaction."* No money
+  moves. A HIGH `USER_DENIED` alert is raised, the attacker device is watch-listed, and the investigation
+  history is updated. The Frauder sees **USER DENIED – PAYMENT BLOCKED**. Message: *"Transaction blocked
+  successfully. You reported that this transaction was not initiated by you. No money has been
+  transferred."*
+- **Unchanged by the answer:** the risk score and triggered rules are kept exactly as first calculated.
 - **Safeguards:**
-  - The answer is validated on the server. Only the logged-in owner can answer (anyone else gets 404, other
-    roles 403).
+  - The answer is validated on the server. Only the logged-in owner can answer (anyone else gets 404; other
+    roles, including the Frauder, get 403).
   - The transaction row is locked, so only the first answer counts; a repeat gets 409.
   - Answers after expiry are rejected (410).
-- **Expiry:** unanswered requests expire after `CONFIRMATION_EXPIRY_MINUTES` (30). `CONFIRMATION_EXPIRY_ACTION`
-  decides what follows: `BLOCK` (default) or `HOLD`, which hands the payment to the fraud team. A payment is
-  never approved automatically. Expiry is applied whenever confirmations are read or answered; there is no
-  background thread.
-- **Settings:** all three (`CONFIRMATION_EXPIRY_MINUTES`, `CONFIRMATION_EXPIRY_ACTION`,
-  `CONFIRMATION_HARD_BLOCK_RULES`) are in `system_settings`.
+  - Analysts cannot decide a payment that is still waiting for its owner (409).
+- **Settings (`system_settings`):**
+  - `CONFIRMATION_EXPIRY_MINUTES` (30).
+  - `CONFIRMATION_EXPIRY_ACTION`: `EXPIRE` (default), `BLOCK`, or `HOLD`, which hands the payment to an
+    analyst. A payment is never approved automatically.
+  - `CONFIRMATION_HARD_BLOCK_RULES`: empty by default. Listing a rule here (e.g. `R6`) makes it an absolute
+    restriction that is blocked without asking.
+- **Expiry timing:** it is applied whenever confirmations, dashboards or notifications are read. There is
+  no background thread.
 - **APIs:**
   - `GET /api/transactions/confirmations`
   - `POST /api/transactions/<id>/confirmation {"response": "YES"|"NO"}`
-  - `POST /api/transactions/<id>/verification/confirm`
   - `GET /api/detection/confirmations`
+- **OTP step-up:** the `verification/*` endpoints remain only for payments confirmed under the earlier OTP
+  flow.
 - **Dashboards:**
-  - User: pending alerts, plus Successful and Blocked history.
-  - Receiver: only payments that were approved and credited.
-  - Frauder: the typed details, the owner's answer and the final label.
-  - Detection System: "Account-owner confirmations" with rules, score, answer and final status.
-  - All four use the same label (`outcome_label`).
+  - User: pending verifications with YES/NO, plus Successful, Blocked and Expired history.
+  - Receiver: only credited payments.
+  - Frauder: the typed details, rules, score, the owner's answer and the final label.
+  - Detection: "Suspicious transactions – owner confirmations" with rules, score, answer and final status.
+  - All four use the same label (`outcome_label`). The plain status name is in `display_status`; the database
+    still stores COMPLETED / UNDER_REVIEW.
 
 **Viva example (tested on the real `bank` database):**
 
 1. As the Frauder, target Rahul. Type city Delhi, location Connaught Place, device type Android phone, device ID
-   ATK-VIVA-01 and IP 49.36.12.8.
-2. Click **Log in with stolen password**.
-3. Attempt ₹80,000 to Priya. R4 + R9 = 65, so the payment is held for Review.
-4. Log in as Rahul: the security alert appears.
-   - **NO** blocks it and no money moves.
-   - Repeat with device ID ATK-VIVA-02 and answer **YES**, then enter the OTP and password. The re-evaluation
-     scores 0, and ₹80,000 moves from Rahul to Priya.
+   ATK-VIVA-01 and IP 49.36.12.8. Attempt ₹80,000 to Priya.
+2. R4 fires (new device, ₹80,000), score 20, so the payment is **USER CONFIRMATION PENDING**. Nothing has moved.
+3. Log in as Rahul. The "Security Verification Required" card appears.
+   - **NO** blocks it: no money moves, and every dashboard shows USER DENIED – PAYMENT BLOCKED.
+   - Repeat with device ID ATK-VIVA-02 and answer **YES**: ₹80,000 moves from Rahul to Priya, and Priya sees
+     it credited.
+4. **Reset fraud attempts** reverses the ₹80,000.
 
-The login step matters. With only a new device and a different city, the engine fires just R4 (20), so the
-payment is **approved and the money moves**. R1 does not fire for Rahul because he has fewer than 3 payments
-in 90 days, so it uses the ₹1,00,000 no-history limit.
-
----
 
 ## 4. The nine rules
 
@@ -299,28 +305,29 @@ cd backend
 pytest -q
 ```
 
-The 87 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
+The 114 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
 server, named automatically from `DATABASE_URL`. Delete it afterwards if you only want one database. They cover:
 - all four logins, account lockout and role-based access
 - every rule firing individually
 - score capping, decision bands, and rule/band configuration
 - balances moving only on approval
 - idempotency and rollback on mid-pipeline failure
-- step-up verification and analyst approve/reject
+- each of the nine rules triggered alone through the Frauder console, held, then YES (paid) and NO (blocked) – 18 cases
+- multiple rules, duplicates, expiry, insufficient balance, frozen receiver, unauthorized and Frauder responses
+- the legacy OTP step-up and analyst approve/reject
 - each of the nine rules triggered by hand through the Frauder console, with exact rules, score and decision; money moving only for approved attempts; repeated submissions, lockout, demo-clock handling, Frauder permissions and the scoped reset
 - Demo Mode and its resets; the automatic simulation endpoints are gone
 - the audit hash chain and immutability
 - re-running migrations without duplicates or data loss
 
 **Manual check (viva script):**
-1. Rahul sends ₹5,000 to `priya@fsbank`: APPROVED.
+1. Rahul sends ₹5,000 to `priya@fsbank`: SUCCESSFUL (no rule fired).
 2. Log in as Priya in another tab: ₹5,000 credited.
-3. Rahul pays ₹10,000 to `quickcash@fsbank`: UNDER REVIEW (R6, 50). Not credited. An alert appears on the
-   Detection dashboard within ~3 s.
-4. Rahul verifies with the OTP: it is still R6, so it goes to the analyst. The analyst approves or rejects
-   it in the investigation view.
-5. Demo Mode → *Simulate a new device*, log in as Rahul again, send ₹30,000: R4 + R9 = 65 → REVIEW.
-   Verifying clears both, and the payment is released.
+3. Rahul pays ₹10,000 to `quickcash@fsbank`: R6 (50), so it is USER CONFIRMATION PENDING. Not credited. An
+   alert appears on the Detection dashboard within ~3 s.
+4. Rahul answers YES: QuickCash is credited. Repeat and answer NO: it is blocked.
+5. Demo Mode → *Simulate a new device*, log in as Rahul again, send ₹30,000: R4 + R9 = 65, so it is held
+   for Rahul's answer.
 6. As the Frauder, follow “Test the 9 Fraud Detection Rules” and watch each attempt appear for Rahul and in the live monitor.
 7. Demo Mode → **Reset demo data** restores everything.
 
@@ -334,7 +341,7 @@ backend/
   config/config.py    Config / TestConfig, read from .env
   docs/API.md         every endpoint
   logs/               app.log (rotating)
-  migrations/         Alembic env + versions 0001–0007
+  migrations/         Alembic env + versions 0001–0008
   portal/
     __init__.py       create_app(): logger → db/migrate → JWT → api → routes → seed CLI
     extensions.py     db, migrate, jwt

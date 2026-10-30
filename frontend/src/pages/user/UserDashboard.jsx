@@ -1,35 +1,19 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { errorMessage, post } from '../../api/client';
-import { useToast } from '../../components/Toast';
 import TxnDetailModal from '../../components/TxnDetailModal';
 import TxnTable from '../../components/TxnTable';
 import SecurityConfirmation from '../../components/SecurityConfirmation';
-import VerifyPaymentModal from '../../components/VerifyPaymentModal';
 import { ErrorNote, Loading, PageHead, StatCard, StatusBadge } from '../../components/ui';
 import { useApi } from '../../hooks';
 import { money, timeAgo } from '../../utils/format';
 
 export default function UserDashboard() {
-  const toast = useToast();
   const { data, error, reload } = useApi('/user/dashboard', null, { interval: 6000 });
   const [selected, setSelected] = useState(null);
-  const [verifying, setVerifying] = useState(null);
 
   if (!data) return error ? <ErrorNote error={error} /> : <Loading />;
   const { account, stats, recent, pending_reviews: pending, pending_confirmations: confirmations, security_alerts: security } = data;
   const withTeam = pending.filter((t) => t.review_stage === 'AWAITING_ANALYST');
-
-  const report = async (txn) => {
-    try {
-      const res = await post(`/transactions/${txn.id}/confirmation`, { response: 'NO' });
-      toast(res.message, 'success', 'Payment blocked');
-      setSelected(null);
-      reload(true);
-    } catch (e) {
-      toast(errorMessage(e), 'error');
-    }
-  };
 
   return (
     <>
@@ -58,16 +42,16 @@ export default function UserDashboard() {
 
       <div className="grid grid-4 mt-16">
         <StatCard icon="✓" tone="green" label="Successful payments" value={stats.completed} sub={`${money(stats.total_sent)} sent`} />
-        <StatCard icon="⏸" tone="amber" label="Under review" value={stats.under_review} sub="Held, not debited" />
-        <StatCard icon="⛔" tone="red" label="Blocked" value={stats.blocked} sub="Stopped by fraud checks" />
-        <StatCard icon="↩" tone="slate" label="Declined / cancelled" value={stats.declined} />
+        <StatCard icon="🔐" tone="amber" label="Awaiting your answer" value={confirmations.length} sub="Held, not debited" />
+        <StatCard icon="⛔" tone="red" label="Blocked" value={stats.blocked} sub="Denied or stopped – no money moved" />
+        <StatCard icon="⌛" tone="slate" label="Expired / declined" value={stats.expired + stats.declined} sub="Never authorized" />
       </div>
 
       {withTeam.length > 0 && (
         <div className="card mt-16">
           <div className="card-head" style={{ background: 'var(--warning-bg)' }}>
             <h2>⏳ With our fraud team</h2>
-            <span className="small muted">You confirmed these, but they still need an analyst – nothing has been debited</span>
+            <span className="small muted">Not answered in time and passed to an analyst – nothing has been debited</span>
           </div>
           <div className="list">
             {withTeam.map((t) => (
@@ -93,11 +77,8 @@ export default function UserDashboard() {
 
       {selected && (
         <TxnDetailModal txn={selected} viewer={selected.direction === 'IN' ? 'receiver' : 'sender'}
-                        onClose={() => setSelected(null)}
-                        onVerify={() => { setVerifying(selected); setSelected(null); }}
-                        onReport={() => report(selected)} />
+                        onClose={() => setSelected(null)} onChange={() => reload(true)} />
       )}
-      {verifying && <VerifyPaymentModal txn={verifying} onClose={() => { setVerifying(null); reload(true); }} onDone={() => reload(true)} />}
     </>
   );
 }

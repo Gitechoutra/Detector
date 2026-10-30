@@ -9,10 +9,11 @@ SETTINGS = [
     ('MAX_TXN_AMOUNT', '1000000', 'Largest single payment accepted (₹).'),
     ('NEW_USER_OPENING_BALANCE', '50000', 'Simulated welcome balance for a newly registered User (sender).'),
     ('CONFIRMATION_EXPIRY_MINUTES', '30', 'How long the account owner has to answer "Was this you?".'),
-    ('CONFIRMATION_EXPIRY_ACTION', 'BLOCK',
-     'Unanswered confirmation: BLOCK the payment, or HOLD it for the fraud team. Never approved.'),
-    ('CONFIRMATION_HARD_BLOCK_RULES', 'R6',
-     'Comma-separated rules a YES from the account owner can never override (payment stays blocked).'),
+    ('CONFIRMATION_EXPIRY_ACTION', 'EXPIRE',
+     'Unanswered confirmation: EXPIRE it (default), BLOCK it, or HOLD it for the fraud team. Never approved.'),
+    ('CONFIRMATION_HARD_BLOCK_RULES', '',
+     'Comma-separated rules treated as an absolute restriction: the payment is blocked and a YES cannot '
+     'authorize it. Empty = none.'),
 ]
 
 

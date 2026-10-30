@@ -413,3 +413,7 @@ html { scroll-behavior: smooth; }
   .security-alert-actions { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 110px 1fr; }
 }
+
+/* Triggered rules on the "Security Verification Required" card */
+.rule-reasons { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13.5px; }
+.rule-reasons li { background: rgba(255, 255, 255, .7); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }

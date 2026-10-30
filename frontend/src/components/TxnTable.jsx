@@ -35,7 +35,7 @@ export default function TxnTable({ items, onSelect, perspective = 'user', emptyT
                 <td className="nowrap muted">{dateTime(t.txn_time)}</td>
                 <td><RiskScore score={t.risk_score} /></td>
                 <td>
-                  {perspective === 'user' && !incoming && t.confirmation ? <OutcomeBadge label={t.outcome_label} /> : <StatusBadge status={t.status} />}
+                  {perspective === 'user' && !incoming && t.confirmation ? <OutcomeBadge label={t.outcome_label} /> : <StatusBadge status={t.display_status || t.status} />}
                   {t.status === 'UNDER_REVIEW' && t.review_stage === 'AWAITING_CUSTOMER' && perspective === 'user' && !incoming &&
                     <div className="small" style={{ color: 'var(--warning)', fontWeight: 600 }}>Action needed – was this you?</div>}
                 </td>

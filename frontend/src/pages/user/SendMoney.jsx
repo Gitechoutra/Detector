@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { errorMessage, get, post } from '../../api/client';
 import { useToast } from '../../components/Toast';
-import VerifyPaymentModal from '../../components/VerifyPaymentModal';
+import SecurityConfirmation from '../../components/SecurityConfirmation';
 import { Field, PageHead, RiskScore, StatusBadge } from '../../components/ui';
 import { useApi } from '../../hooks';
 import { money } from '../../utils/format';
@@ -33,7 +33,6 @@ export default function SendMoney() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
-  const [verifying, setVerifying] = useState(null);
   const [idemKey, setIdemKey] = useState(newKey);
 
   useEffect(() => {
@@ -90,6 +89,7 @@ export default function SendMoney() {
         { headers: { 'Idempotency-Key': idemKey } });
       setResult({ ...res.data, message: res.message });
       const tone = { COMPLETED: 'success', UNDER_REVIEW: 'warning', BLOCKED: 'error' }[res.data.status] || 'info';
+      // A flagged payment asks for the owner's answer on this page and the dashboard.
       toast(res.message, tone);
       reload(true);
     } catch (err) {
@@ -115,7 +115,10 @@ export default function SendMoney() {
       <div className="grid grid-main">
         <div className="card card-pad">
           {result ? (
-            <ResultPanel result={result} onVerify={() => setVerifying(result)} onAgain={reset} />
+            <ResultPanel result={result} onAgain={reset} onAnswered={async () => {
+              reload(true);
+              try { setResult({ ...(await get(`/user/transactions/${result.id}`)), message: null }); } catch { /* keep the last result */ }
+            }} />
           ) : (
             <form className="form-grid" onSubmit={send}>
               <div className="segmented" role="tablist">
@@ -185,26 +188,37 @@ export default function SendMoney() {
             <ol className="small muted" style={{ paddingLeft: 18, margin: '8px 0 0', display: 'grid', gap: 6 }}>
               <li>Saved and checked against 9 SQL fraud rules in one database transaction.</li>
               <li>Risk score = sum of the weights of the rules that fire (max 100).</li>
-              <li><span className="badge b-green">0–39</span> sent instantly · <span className="badge b-amber">40–69</span> held for verification · <span className="badge b-red">70+</span> blocked.</li>
-              <li>Money leaves your account only when the payment is approved.</li>
+              <li>No rule triggered → sent instantly.</li>
+              <li>Any rule triggered (whatever the score) → held, and you are asked <strong>“Did you initiate this transaction?”</strong> YES sends it, NO blocks it.</li>
+              <li>Money leaves your account only after a YES (or when no rule fires).</li>
             </ol>
           </div>
         </div>
       </div>
-      {verifying && <VerifyPaymentModal txn={verifying} onClose={() => setVerifying(null)} onDone={() => { reload(true); }} />}
     </>
   );
 }
 
-function ResultPanel({ result, onVerify, onAgain }) {
+function ResultPanel({ result, onAgain, onAnswered }) {
   const tone = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-warn', BLOCKED: 'notice-danger' }[result.status] || 'notice-info';
   const icon = { COMPLETED: '✅', UNDER_REVIEW: '⏸', BLOCKED: '⛔' }[result.status] || 'ℹ';
+  if (result.confirmation?.status === 'PENDING') {
+    return (
+      <div className="stack">
+        <SecurityConfirmation items={[result]} onChange={onAnswered} />
+        <div className="row wrap"><Link className="btn btn-ghost" to="/user/transactions">View history</Link></div>
+      </div>
+    );
+  }
   return (
     <div className="stack">
+      {result.final_reason && result.status !== 'UNDER_REVIEW' && (
+        <div className={`notice ${result.status === 'COMPLETED' ? 'notice-success' : 'notice-danger'}`}>{result.final_reason}</div>
+      )}
       <div className={`notice ${tone}`} style={{ display: 'block', padding: 18 }}>
         <div className="row-between">
-          <strong style={{ fontSize: 17 }}>{icon} {result.message}</strong>
-          <StatusBadge status={result.status} />
+          <strong style={{ fontSize: 17 }}>{icon} {result.message || result.outcome_label}</strong>
+          <StatusBadge status={result.display_status || result.status} />
         </div>
         <div style={{ fontSize: 26, fontWeight: 700, margin: '10px 0 4px' }}>{money(result.amount)}</div>
         <div className="small">to {result.receiver.name} ({result.receiver.upi_id}) · Ref {result.txn_ref}</div>
@@ -221,7 +235,6 @@ function ResultPanel({ result, onVerify, onAgain }) {
         </div>
       ) : <p className="muted small">No fraud rules fired.</p>}
       <div className="row wrap">
-        {result.status === 'UNDER_REVIEW' && <button className="btn btn-primary" onClick={onVerify}>Verify payment now</button>}
         <button className="btn btn-ghost" onClick={onAgain}>Send another payment</button>
         <Link className="btn btn-ghost" to="/user/transactions">View history</Link>
       </div>

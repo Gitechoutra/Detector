@@ -1,12 +1,17 @@
 """Payment pipeline: ingest → persist → evaluate → score → decide → alert.
 
 Persist, evaluate, score, decide and the balance movement all happen inside one
-DB transaction that is committed once. Balances move only when a payment is
-APPROVED (initially, after the owner confirms it and passes step-up, or by an analyst).
+DB transaction that is committed once.
 
-A REVIEW payment opens a confirmation request for its owner: "Was this
-transaction initiated by you?". NO blocks it at once. YES leads to OTP +
-password verification and a full re-evaluation – it never approves on its own."""
+No rule triggered  → the normal flow: the payment completes at once
+                     (except Frauder attempts: never made by the owner, always held).
+Any rule triggered → the payment is held (USER_CONFIRMATION_PENDING) and its owner
+is asked "Did you initiate this transaction?". Nothing is debited until then.
+  YES → the payment is re-validated (accounts, balance, absolute restrictions)
+        and, if it can be processed, completed (SUCCESSFUL).
+  NO  → BLOCKED at once; no money moves.
+  No answer in time → EXPIRED; never authorized.
+The risk score and triggered rules are recorded either way, for investigation."""
 import ipaddress
 import secrets
 import time
@@ -18,7 +23,8 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from portal.extensions import db
-from portal.models import Account, Alert, Device, Transaction, VerificationChallenge, WatchlistEntry, now
+from portal.models import (Account, Alert, Device, Notification, Transaction, VerificationChallenge,
+                           WatchlistEntry, now)
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError
 from portal.helpers import fraud_engine
@@ -95,14 +101,21 @@ RULE_PHRASES = {
 }
 
 
-def explain(result):
-    """e.g. "Transaction blocked because a high-value transfer was initiated from an
-    unrecognized device. The risk score of 95 exceeded the blocking threshold of 70." """
-    if result['decision'] == 'APPROVED':
+def _phrases(codes):
+    phrases = [RULE_PHRASES[c] for c in codes if c in RULE_PHRASES]
+    return phrases[0] if len(phrases) == 1 else ', '.join(phrases[:-1]) + ' and ' + phrases[-1]
+
+
+def explain(result, held=False):
+    """e.g. "Held for the account owner's authorization because a high-value transfer
+    was initiated from an unrecognized device. Risk score 20 (approve band)." """
+    if not result['hits'] or (result['decision'] == 'APPROVED' and not held):
         return None
-    phrases = [RULE_PHRASES[h['code']] for h in result['hits'] if h['code'] in RULE_PHRASES]
-    reason = phrases[0] if len(phrases) == 1 else ', '.join(phrases[:-1]) + ' and ' + phrases[-1]
-    if result['decision'] == 'BLOCKED':
+    reason = _phrases([h['code'] for h in result['hits']])
+    if held:
+        text = (f"Held for the account owner's authorization because {reason}. Risk score {result['score']} "
+                f"({result['decision'].lower()} band). No money moves until the owner answers YES.")
+    elif result['decision'] == 'BLOCKED':
         text = (f'Transaction blocked because {reason}. The risk score of {result["score"]} exceeded the '
                 f'blocking threshold of {fraud_engine.band_floor("BLOCKED")}.')
     else:
@@ -132,8 +145,7 @@ def _settle(txn, at=None, reason=None):
         if account.last_txn_at is None or account.last_txn_at < txn.txn_time:
             account.last_txn_at = txn.txn_time
     txn.status, txn.review_stage, txn.completed_at = 'COMPLETED', None, at
-    txn.final_reason = reason or (f'Approved – risk score {txn.risk_score} is below the review threshold of '
-                                  f'{fraud_engine.band_floor("REVIEW")}.')
+    txn.final_reason = reason or 'Successful – none of the nine fraud rules was triggered.'
     notify(sender.user_id, 'Payment successful',
            f'{inr(txn.amount)} sent to {receiver.user.full_name} ({txn.txn_ref}).', 'SUCCESS', txn.id,
            txn.is_simulated)
@@ -190,37 +202,47 @@ def _auto_watchlist(txn, result):
                                           reason=f'Auto-added after account-takeover block of {txn.txn_ref}'))
 
 
-def _apply_decision(txn, result):
+def _apply_decision(txn, result, owner_must_confirm=False):
     sender_user = txn.sender_account.user
     receiver_user = txn.receiver_account.user
+    codes = [h['code'] for h in result['hits']]
     rules = ', '.join(f"{h['code']} {h['name']}" for h in result['hits']) or 'none'
-    if result['decision'] == 'APPROVED':
-        _settle(txn)
-    elif result['decision'] == 'REVIEW':
-        txn.status = 'UNDER_REVIEW'
-        txn.risk_explanation = explain(result)
-        # Anyone who can log in confirms their own payment; only accounts that
-        # cannot log in (legacy sim.* accounts) go straight to an analyst.
-        txn.review_stage = 'AWAITING_ANALYST' if sender_user.is_simulated else 'AWAITING_CUSTOMER'
-        if txn.review_stage == 'AWAITING_CUSTOMER':
-            _open_confirmation(txn)
-        raise_alert('TRANSACTION_REVIEW', 'MEDIUM',
-                    f'Review: {inr(txn.amount)} {sender_user.full_name} → {receiver_user.full_name}',
-                    f'Risk score {result["score"]}. Rules fired: {rules}. {txn.risk_explanation}',
-                    user_id=sender_user.id, transaction_id=txn.id, risk_score=result['score'],
-                    simulated=txn.is_simulated)
-        notify(sender_user.id, 'Security Alert: Was this transaction initiated by you?',
-               f'{inr(txn.amount)} to {receiver_user.full_name} ({txn.txn_ref}) is on hold and nothing has been '
-               f'debited. Open your dashboard and answer YES, IT WAS ME or NO, NOT ME.',
-               'WARNING', txn.id, txn.is_simulated)
-    else:
-        _block(txn, result)
+    if not codes and not owner_must_confirm:
+        _settle(txn)        # no rule triggered: the normal payment flow
+        return
+    hard = sorted(hard_block_rules() & set(codes))
+    if hard:
+        # An absolute restriction (configured, none by default): blocked, no question asked.
+        _block(txn, result, (f'Transaction blocked because {_phrases(hard)}. {", ".join(hard)} is configured as an '
+                             f'absolute security restriction. Risk score {result["score"]}.')[:500])
         raise_alert('TRANSACTION_BLOCKED', 'HIGH',
                     f'Blocked: {inr(txn.amount)} {sender_user.full_name} → {receiver_user.full_name}',
                     f'Risk score {result["score"]}. Rules fired: {rules}. {txn.risk_explanation}',
                     user_id=sender_user.id, transaction_id=txn.id, risk_score=result['score'],
                     simulated=txn.is_simulated)
         _auto_watchlist(txn, result)
+        return
+
+    # Any triggered rule, whatever the score: hold it and ask the owner.
+    txn.status = 'UNDER_REVIEW'
+    txn.risk_explanation = explain(result, held=True) or (
+        "Held for the account owner's authorization: no fraud rule was triggered (risk score 0), but the payment "
+        "was not made from the owner's own banking session. No money moves until the owner answers YES.")
+    # Accounts that cannot log in (legacy sim.* accounts) go straight to an analyst.
+    txn.review_stage = 'AWAITING_ANALYST' if sender_user.is_simulated else 'AWAITING_CUSTOMER'
+    if txn.review_stage == 'AWAITING_CUSTOMER':
+        _open_confirmation(txn)
+        notify(sender_user.id, SECURITY_TITLE,
+               f'A transaction is being attempted from your account. Please confirm whether you initiated this '
+               f'transaction. {inr(txn.amount)} to {receiver_user.full_name} ({txn.txn_ref}) – rules {", ".join(codes) or "none"}, '
+               f'risk score {result["score"]}. Nothing has been debited.',
+               'WARNING', txn.id, txn.is_simulated)
+    raise_alert('TRANSACTION_REVIEW', 'HIGH' if result['decision'] == 'BLOCKED' else 'MEDIUM',
+                f'Awaiting owner: {inr(txn.amount)} {sender_user.full_name} → {receiver_user.full_name}',
+                f'Risk score {result["score"]} ({result["decision"]} band). Rules fired: {rules}. '
+                f'{txn.risk_explanation}',
+                user_id=sender_user.id, transaction_id=txn.id, risk_score=result['score'],
+                simulated=txn.is_simulated)
 
 
 def _to_millis(at):
@@ -235,7 +257,8 @@ def _new_ref():
 
 def send_money(sender_user, method, receiver_data, amount, remarks=None, idempotency_key=None,
                device_id=None, ip=None, location_id=None, *, simulated=False, run_id=None,
-               scenario_code=None, fraud_label=None, txn_time=None, simulated_details=None):
+               scenario_code=None, fraud_label=None, txn_time=None, simulated_details=None,
+               owner_must_confirm=False):
     """Returns (transaction, replayed). Raises ApiError for invalid requests;
     a valid request always ends in a committed transaction with a decision."""
     started = time.perf_counter()
@@ -280,7 +303,7 @@ def send_money(sender_user, method, receiver_data, amount, remarks=None, idempot
         db.session.flush()
 
         result = fraud_engine.evaluate(txn)
-        _apply_decision(txn, result)
+        _apply_decision(txn, result, owner_must_confirm)
         txn.decided_at = now()
         txn.latency_ms = round((time.perf_counter() - started) * 1000, 2)
         db.session.commit()
@@ -319,10 +342,11 @@ def _own_review_txn(user, txn_id):
 
 
 def start_verification(user, txn_id):
+    """OTP step-up, kept only for payments confirmed under the earlier OTP flow."""
     txn = _own_review_txn(user, txn_id)
     if txn.confirmation_status == 'PENDING':
-        # Asking for the OTP is the owner's YES: record it once, the same way.
-        return respond_to_confirmation(user, txn_id, 'YES')['verification']
+        raise ApiError('Answer the security verification instead: YES, I initiated it, or NO.', 409,
+                       'USE_CONFIRMATION')
     for old in VerificationChallenge.query.filter_by(transaction_id=txn.id, status='PENDING').all():
         old.status = 'EXPIRED'
     otp = f'{secrets.randbelow(1_000_000):06d}'
@@ -428,6 +452,9 @@ def cancel_review(user, txn_id, ip=None):
         raise ApiError('Payment not found.', 404, 'NOT_FOUND')
     if txn.status != 'UNDER_REVIEW':
         raise ApiError('Only payments on hold can be cancelled.', 409, 'NOT_UNDER_REVIEW')
+    if txn.confirmation_status == 'PENDING':
+        raise ApiError('Answer the security verification instead: YES authorizes it, NO blocks it.', 409,
+                       'USE_CONFIRMATION')
     txn.status, txn.review_stage, txn.decline_reason = 'CANCELLED', None, 'Cancelled by customer.'
     txn.final_reason = 'Cancelled by the account owner.'
     if txn.confirmation_status == 'PENDING':
@@ -445,9 +472,13 @@ def report_not_me(user, txn_id, ip=None):
 
 # ── Account-owner confirmation: "Was this transaction initiated by you?" ─────
 
+SECURITY_TITLE = 'Security Verification Required'
+DENIED_REASON = 'Account owner denied initiating this transaction.'
+
+
 def hard_block_rules():
-    """Rules a YES can never override, e.g. R6: a watch-listed mule account
-    stays blocked even if a (possibly coached) customer insists."""
+    """Rules treated as an absolute restriction (setting, empty by default):
+    such a payment is blocked outright and a YES cannot authorize it."""
     raw = setting('CONFIRMATION_HARD_BLOCK_RULES', str) or ''
     return {code.strip().upper() for code in raw.split(',') if code.strip()}
 
@@ -464,28 +495,37 @@ def _lock_txn(txn_id):
     return db.session.get(Transaction, txn_id, populate_existing=True)
 
 
+def _close_security_notice(txn):
+    """The request leaves the notification centre once answered or expired."""
+    Notification.query.filter_by(transaction_id=txn.id, title=SECURITY_TITLE, is_read=False).update(
+        {'is_read': True}, synchronize_session=False)
+
+
 def _expire(txn):
-    """No answer in time. Never approved: blocked, or handed to the fraud team (HOLD)."""
+    """No answer in time. Never authorized: EXPIRED (default), BLOCKED, or handed to the fraud team (HOLD)."""
     minutes = setting('CONFIRMATION_EXPIRY_MINUTES')
     owner = txn.sender_account.user
     txn.confirmation_status = 'EXPIRED'
+    _close_security_notice(txn)
     for challenge in VerificationChallenge.query.filter_by(transaction_id=txn.id, status='PENDING').all():
         challenge.status = 'EXPIRED'
-    if setting('CONFIRMATION_EXPIRY_ACTION', str).strip().upper() == 'HOLD':
+    action = (setting('CONFIRMATION_EXPIRY_ACTION', str) or 'EXPIRE').strip().upper()
+    if action == 'HOLD':
         txn.review_stage = 'AWAITING_ANALYST'
         txn.final_reason = (f'The account owner did not confirm this payment within {minutes} minutes, so it was '
                             f'passed to the fraud team. Nothing has been debited.')
         notify(owner.id, 'Unconfirmed payment passed to our fraud team',
                f'{inr(txn.amount)} to {txn.receiver_account.user.full_name} ({txn.txn_ref}): {txn.final_reason}',
                'WARNING', txn.id, txn.is_simulated)
-        action = 'HOLD'
     else:
-        reason = f'Transaction blocked because the account owner did not confirm it within {minutes} minutes.'
-        txn.status, txn.review_stage, txn.decline_reason, txn.final_reason = 'BLOCKED', None, reason, reason
-        notify(owner.id, 'Unconfirmed payment blocked',
-               f'{inr(txn.amount)} to {txn.receiver_account.user.full_name} ({txn.txn_ref}): {reason} '
-               f'No money has left your account.', 'DANGER', txn.id, txn.is_simulated)
-        action = 'BLOCK'
+        status = 'BLOCKED' if action == 'BLOCK' else 'EXPIRED'
+        reason = (f'{"Blocked" if status == "BLOCKED" else "Expired"}: the account owner did not respond within '
+                  f'{minutes} minutes, so the transaction was not authorized. No money has been transferred.')
+        txn.status, txn.review_stage, txn.decline_reason, txn.final_reason = status, None, reason, reason
+        notify(owner.id, 'Unanswered payment not authorized',
+               f'{inr(txn.amount)} to {txn.receiver_account.user.full_name} ({txn.txn_ref}): {reason}',
+               'DANGER', txn.id, txn.is_simulated)
+        action = status
     write_audit('CONFIRMATION_EXPIRED', 'transaction', txn.id, {'minutes': minutes, 'action': action})
 
 
@@ -529,46 +569,99 @@ def respond_to_confirmation(user, txn_id, response, ip=None):
         raise ApiError(f'Too late: {txn.final_reason}', 410, 'CONFIRMATION_EXPIRED')
 
     txn.confirmation_response, txn.confirmation_responded_at = response, now()
+    _close_security_notice(txn)
     if response == 'NO':
         return _deny(user, txn, ip)
 
     txn.confirmation_status = 'CONFIRMED'
-    # YES only opens step-up verification; keep the request open long enough for the OTP.
-    txn.confirmation_expires_at = max(txn.confirmation_expires_at,
-                                      now() + timedelta(minutes=setting('OTP_EXPIRY_MINUTES')))
-    security_event(user.id, 'PAYMENT_CONFIRMED', f'Owner answered YES for {txn.txn_ref}; step-up verification sent',
+    security_event(user.id, 'PAYMENT_CONFIRMED', f'Owner answered YES: authorized {txn.txn_ref}',
                    'LOW', device_id=txn.device_id, ip=ip, transaction_id=txn.id, simulated=txn.is_simulated)
-    write_audit('CONFIRMATION_YES', 'transaction', txn.id, {}, actor=user, ip=ip)
-    db.session.flush()
-    verification = start_verification(user, txn.id)
-    return {'response': 'YES', 'verification': verification, 'transaction': txn.to_dict('user')}
+    write_audit('CONFIRMATION_YES', 'transaction', txn.id, {'risk_score': txn.risk_score}, actor=user, ip=ip)
+    return _authorize(user, txn, ip)
+
+
+def _restriction(txn, sender, receiver):
+    """Why an authorized payment still cannot be processed, or None."""
+    if sender.user.status != 'ACTIVE' or sender.status != 'ACTIVE':
+        return 'the sender account is locked or frozen'
+    if receiver.status != 'ACTIVE' or receiver.user.status != 'ACTIVE':
+        return 'the receiver account can no longer accept payments'
+    if sender.balance < txn.amount:
+        return f'the available balance ({inr(sender.balance)}) is lower than the amount ({inr(txn.amount)})'
+    hard = sorted(hard_block_rules() & {h.rule_code for h in txn.latest_hits()})
+    if hard:
+        return f'{_phrases(hard)}, which is an absolute security restriction ({", ".join(hard)})'
+    return None
+
+
+def _authorize(user, txn, ip):
+    """YES is the owner's authorization, not a bypass: the payment is re-validated
+    under row locks first, then completed exactly once. The recorded risk score and
+    triggered rules are kept as they were for investigation."""
+    accounts = _lock_accounts(txn.sender_account_id, txn.receiver_account_id)
+    problem = _restriction(txn, accounts[txn.sender_account_id], accounts[txn.receiver_account_id])
+    rules = ', '.join(h.rule_code for h in txn.latest_hits())
+    if problem:
+        reason = (f'You authorized this payment, but it was blocked because {problem}. '
+                  f'No money has been transferred.')[:500]
+        txn.status, txn.review_stage, txn.decline_reason, txn.final_reason = 'BLOCKED', None, reason, reason
+        raise_alert('TRANSACTION_BLOCKED', 'HIGH', f'Authorized but blocked: {txn.txn_ref}', reason,
+                    user_id=user.id, transaction_id=txn.id, risk_score=txn.risk_score, simulated=txn.is_simulated)
+        notify(user.id, 'Payment could not be processed', f'{inr(txn.amount)} ({txn.txn_ref}): {reason}',
+               'DANGER', txn.id, txn.is_simulated)
+        outcome = 'blocked'
+        message = reason
+    else:
+        _settle(txn, reason=(f'Transaction successfully authorized by the account owner (YES). Triggered rules '
+                             f'{rules}, risk score {txn.risk_score} – kept for investigation.'))
+        _resolve_open_alerts(txn, 'FALSE_POSITIVE', note='Account owner authorized the payment (YES).')
+        outcome = 'authorized'
+        message = 'Transaction successfully authorized. The amount has been transferred to the Receiver.'
+    write_audit('PAYMENT_AUTHORIZED' if outcome == 'authorized' else 'AUTHORIZED_BUT_BLOCKED', 'transaction',
+                txn.id, {'risk_score': txn.risk_score, 'rules': rules}, actor=user, ip=ip)
+    db.session.commit()
+    return {'response': 'YES', 'outcome': outcome, 'message': message, 'transaction': txn.to_dict('user')}
 
 
 def _deny(user, txn, ip):
-    reason = 'Transaction blocked because the account owner denied initiating this payment.'
     txn.confirmation_status = 'DENIED'
-    txn.status, txn.review_stage, txn.decline_reason, txn.final_reason = 'BLOCKED', None, reason, reason
+    txn.status, txn.review_stage, txn.decline_reason, txn.final_reason = (
+        'BLOCKED', None, DENIED_REASON, DENIED_REASON)
     for challenge in VerificationChallenge.query.filter_by(transaction_id=txn.id, status='PENDING').all():
         challenge.status = 'EXPIRED'
     _resolve_open_alerts(txn, 'CONFIRMED_FRAUD', note='Account owner answered NO: "I did not initiate this payment."')
+    # Block the attacker: their untrusted device and public IP go on the watchlist (R6 from now on).
+    entries = []
     device = db.session.get(Device, txn.device_id) if txn.device_id else None
-    if device and not device.is_trusted and not WatchlistEntry.query.filter_by(
-            entity_type='DEVICE', entity_value=device.fingerprint).first():
-        db.session.add(WatchlistEntry(entity_type='DEVICE', entity_value=device.fingerprint, source='AUTO',
-                                      reason=f'Account owner denied {txn.txn_ref}'))
+    if device and not device.is_trusted:
+        entries.append(('DEVICE', device.fingerprint))
+    try:
+        if txn.ip_address and ipaddress.ip_address(txn.ip_address).is_global:
+            entries.append(('IP', txn.ip_address))
+    except ValueError:
+        pass
+    for entity_type, value in entries:
+        if not WatchlistEntry.query.filter_by(entity_type=entity_type, entity_value=value).first():
+            db.session.add(WatchlistEntry(entity_type=entity_type, entity_value=value, source='AUTO',
+                                          reason=f'Account owner denied {txn.txn_ref}'))
     receiver = txn.receiver_account.user.full_name
+    rules = ', '.join(h.rule_code for h in txn.latest_hits()) or 'none'
     security_event(user.id, 'FRAUD_REPORTED', f'Owner answered NO: did not initiate {txn.txn_ref}', 'HIGH',
                    device_id=txn.device_id, ip=ip, transaction_id=txn.id, simulated=txn.is_simulated)
     raise_alert('USER_DENIED', 'HIGH', f'User denied payment: {user.full_name}',
                 f'{user.full_name} answered NO – they did not initiate {txn.txn_ref} ({inr(txn.amount)} to '
-                f'{receiver}). Blocked, no money moved. Possible account takeover: review the device and logins.',
+                f'{receiver}; rules {rules}, risk score {txn.risk_score}). Blocked, no money moved. '
+                f'Possible account takeover: review the device and logins.',
                 user_id=user.id, transaction_id=txn.id, risk_score=txn.risk_score, simulated=txn.is_simulated)
     notify(user.id, 'Payment blocked – you said it was not you',
            f'{inr(txn.amount)} to {receiver} ({txn.txn_ref}) was blocked. No money left your account. '
            f'If someone knows your password, change it now.', 'DANGER', txn.id, txn.is_simulated)
     write_audit('CONFIRMATION_NO', 'transaction', txn.id, {}, actor=user, ip=ip)
     db.session.commit()
-    return {'response': 'NO', 'transaction': txn.to_dict('user')}
+    return {'response': 'NO', 'outcome': 'blocked',
+            'message': ('Transaction blocked successfully. You reported that this transaction was not initiated '
+                        'by you. No money has been transferred.'),
+            'transaction': txn.to_dict('user')}
 
 
 # ── Analyst decision for REVIEW payments ────────────────────────────────────
@@ -579,9 +672,10 @@ def analyst_decision(analyst, txn_id, action, notes=None, ip=None):
         raise ApiError('Transaction not found.', 404, 'NOT_FOUND')
     if txn.status != 'UNDER_REVIEW':
         raise ApiError('Only transactions under review can be decided.', 409, 'NOT_UNDER_REVIEW')
-    note = f'{analyst.full_name}: {notes}' if notes else None
     if txn.confirmation_status == 'PENDING':
-        txn.confirmation_status = 'CLOSED'   # the analyst decided before the owner answered
+        raise ApiError("This payment is waiting for the account owner's YES/NO. Only the owner can decide it.",
+                       409, 'AWAITING_OWNER')
+    note = f'{analyst.full_name}: {notes}' if notes else None
 
     if action == 'REJECT':
         _decline(txn, 'Rejected by the fraud team after review.')

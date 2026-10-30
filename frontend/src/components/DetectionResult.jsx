@@ -8,7 +8,7 @@ const RULE_STATUS = {
   DISABLED: ['Disabled', 'b-slate'],
 };
 const TIMELINE_ICON = { activity: '🕵️', submit: '📤', engine: '⚙️', decision: '⚖️', confirm: '🙋', alert: '🚨', money: '💰' };
-const ANSWER = { YES: ['YES, IT WAS ME', 'b-green'], NO: ['NO, NOT ME', 'b-red'] };
+const ANSWER = { YES: ['YES – user authorized', 'b-green'], NO: ['NO – user denied', 'b-red'] };
 
 /** What the owner was asked and how they answered. */
 export function ConfirmationPanel({ txn }) {
@@ -25,7 +25,7 @@ export function ConfirmationPanel({ txn }) {
               : <span className="badge b-amber badge-dot">Waiting for {owner}…</span>}
       </div>
       <p className="small muted mt-8">
-        Asked: “Was this {money(txn.amount)} transaction to {txn.receiver_name || txn.receiver?.name} initiated by you?”
+        Security Verification Required: “Did you initiate this {money(txn.amount)} transaction to {txn.receiver_name || txn.receiver?.name}?”
         {c.responded_at ? ` · answered at ${timeOnly(c.responded_at)}` : c.expires_at ? ` · expires at ${timeOnly(c.expires_at)}` : ''}
       </p>
     </div>
@@ -54,7 +54,7 @@ export function SimulatedDetails({ details }) {
     </div>
   );
 }
-const DECISION_NOTICE = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-warn', BLOCKED: 'notice-danger' };
+const DECISION_NOTICE = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-warn', BLOCKED: 'notice-danger', EXPIRED: 'notice-info' };
 
 /** The full, backend-generated explanation of one fraud decision. */
 export default function DetectionResult({ result }) {
@@ -67,9 +67,10 @@ export default function DetectionResult({ result }) {
           <strong style={{ fontSize: 16 }}>
             {result.status === 'COMPLETED' ? '✅ Successful – money transferred'
               : result.status === 'UNDER_REVIEW' ? (result.review_stage === 'AWAITING_CUSTOMER'
-                ? `⏸ Waiting for ${result.sender_name.split(' ')[0]}’s answer – no money moved`
+                ? `🔐 USER CONFIRMATION PENDING – waiting for ${result.sender_name.split(' ')[0]}’s YES/NO, no money moved`
                 : '⏸ With the fraud team – no money moved')
-                : result.status === 'BLOCKED' ? '⛔ Blocked – no money moved' : result.status}
+                : result.status === 'BLOCKED' ? '⛔ Blocked – no money moved'
+                  : result.status === 'EXPIRED' ? '⌛ Expired – never authorized, no money moved' : result.status}
           </strong>
           <OutcomeBadge label={result.outcome_label} />
         </div>

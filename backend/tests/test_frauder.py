@@ -75,7 +75,7 @@ def test_r1_high_amount_against_victims_own_average(client, app, fr):
     for amount in (500, 1000, 1500):                     # genuine history: average ₹1,000
         assert send(client, rahul, amount).get_json()['data']['status'] == 'COMPLETED'
     result = fr.transfer(8000)                            # limit 5 × 1,000 = 5,000
-    assert rules(result) == {'R1'} and result['risk_score'] == 30 and result['status'] == 'COMPLETED'
+    assert rules(result) == {'R1'} and result['risk_score'] == 30 and result['status'] == 'UNDER_REVIEW'
     r1 = next(t for t in result['rule_trace'] if t['code'] == 'R1')
     assert '₹1,000.00' in r1['observed'] and '₹5,000.00' in r1['threshold']
 
@@ -149,26 +149,30 @@ def test_r9_wrong_otps(client, fr):
 
 # ── Decisions & money ───────────────────────────────────────────────────────
 
-def test_blocked_attempt_moves_no_money_and_explains(app, fr):
+def test_held_attempt_moves_no_money_and_explains(app, fr):
     fr.login('WRONG_PASSWORD'), fr.login('WRONG_PASSWORD'), fr.login('WRONG_PASSWORD')
     device = fr.login('STOLEN_PASSWORD', city='hyderabad')['device_id']
     result = fr.transfer(80000, receiver='quickcash', device=str(device))
-    assert {'R4', 'R6', 'R9'} <= rules(result) and result['risk_score'] == 100 and result['status'] == 'BLOCKED'
-    assert result['risk_explanation'].startswith('Transaction blocked because')
+    assert {'R4', 'R6', 'R9'} <= rules(result) and result['risk_score'] == 100 and result['status'] == 'UNDER_REVIEW'
+    assert result['outcome_label'] == 'USER CONFIRMATION PENDING'
+    assert result['risk_explanation'].startswith("Held for the account owner's authorization because")
     assert 'unrecognized device' in result['risk_explanation']
     assert result['balances']['sender']['before'] == result['balances']['sender']['after'] == 250000
     labels = [i['label'] for i in result['timeline']]
     for step in ('Transaction submitted', 'Fraud rules evaluated', 'Rules triggered', 'Risk score calculated',
-                 'Engine decision', 'Security alert created', 'Money not moved'):
+                 'Risk band (recorded)', 'Security alert created', 'Waiting – no money moved yet'):
         assert step in labels, step
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
     assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
 
 
-def test_approved_attempt_moves_money_on_both_sides(app, fr):
+def test_attempt_without_rules_still_needs_the_owner_then_moves_money(client, app, fr):
     result = fr.transfer(1500)
-    assert result['status'] == 'COMPLETED' and result['money_moved'] is True
-    assert result['balances']['sender']['after'] == 248500 and result['balances']['receiver']['after'] == 26500
+    assert result['rule_trace'] and not rules(result) and result['risk_score'] == 0
+    assert result['status'] == 'UNDER_REVIEW' and result['money_moved'] is False
+    assert result['balances']['sender']['after'] == 250000
+    rahul = login(client, 'rahul@demo.bank')
+    client.post(f"/api/transactions/{result['id']}/confirmation", headers=rahul, json={'response': 'YES'})
     assert balance(app, 'rahul@demo.bank') == Decimal('248500')
     assert balance(app, 'priya@demo.bank') == Decimal('26500')
 
@@ -185,6 +189,8 @@ def test_review_stays_pending_until_owner_verifies(client, app, fr):
 
 def test_same_record_on_every_dashboard(client, fr):
     result = fr.transfer(1250)
+    client.post(f"/api/transactions/{result['id']}/confirmation", headers=login(client, 'rahul@demo.bank'),
+                json={'response': 'YES'})
     rahul = client.get('/api/user/transactions', headers=login(client, 'rahul@demo.bank')).get_json()['data']['items']
     priya = client.get('/api/receiver/payments', headers=login(client, 'priya@demo.bank')).get_json()['data']['items']
     analyst = client.get('/api/detection/transactions', headers=login(client, 'analyst@demo.bank')).get_json()['data']['items']
@@ -198,7 +204,7 @@ def test_repeated_submission_does_not_pay_twice(app, fr):
     first = fr.transfer(1000, key='same-click')
     again = fr.transfer(1000, key='same-click', expect=200)
     assert again['replayed'] is True and again['id'] == first['id']
-    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank'] - 1000
+    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']          # held, not paid
 
 
 def test_genuine_owner_payment_not_blocked_after_attacks(client, fr):

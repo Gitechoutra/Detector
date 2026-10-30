@@ -175,7 +175,7 @@ export default function Overview() {
   );
 }
 
-const ANSWER = { YES: ['YES', 'b-green'], NO: ['NO', 'b-red'] };
+const ANSWER = { YES: ['YES – authorized', 'b-green'], NO: ['NO – denied', 'b-red'] };
 
 function ConfirmationsCard({ data, onOpen }) {
   if (!data) return null;
@@ -183,10 +183,10 @@ function ConfirmationsCard({ data, onOpen }) {
   return (
     <div className="card mt-16">
       <div className="card-head">
-        <h2>🙋 Account-owner confirmations</h2>
+        <h2>🔐 Suspicious transactions – owner confirmations</h2>
         <span className="small muted">{data.counts.pending} waiting · {data.counts.yes} YES · {data.counts.no} NO · {data.counts.expired} expired</span>
       </div>
-      {rows.length === 0 ? <Empty icon="🙋" title="No confirmations yet">When a payment scores Review, its owner is asked “Was this transaction initiated by you?”.</Empty> : (
+      {rows.length === 0 ? <Empty icon="🙋" title="No confirmations yet">When any fraud rule fires, the payment is held and its owner is asked whether they initiated it.</Empty> : (
         <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Ref</th><th>Owner → Receiver</th><th>Amount</th><th>Score</th><th>Rules</th><th>Owner’s answer</th><th>Final status</th></tr></thead>

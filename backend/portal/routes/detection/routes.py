@@ -74,7 +74,7 @@ def confirmations():
     the latest answers and what finally happened."""
     payment_engine.expire_confirmations()
     base = Transaction.query.filter(Transaction.confirmation_status.isnot(None))
-    pending = (base.filter(Transaction.confirmation_status.in_(('PENDING', 'CONFIRMED')),
+    pending = (base.filter(Transaction.confirmation_status == 'PENDING',
                            Transaction.status == 'UNDER_REVIEW')
                .order_by(Transaction.confirmation_expires_at).all())
     answered = (base.filter(Transaction.id.notin_([t.id for t in pending] or [0]))

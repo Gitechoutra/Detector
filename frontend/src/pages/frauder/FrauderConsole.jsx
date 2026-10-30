@@ -142,6 +142,7 @@ export default function FrauderConsole() {
       const res = await post('/frauder/transfer', body, { headers: { 'Idempotency-Key': keyRef.current } });
       keyRef.current = newKey();
       setResult(res.data);
+      setForm(BLANK);     // each attempt starts from an empty form
       const tone = { COMPLETED: 'warning', UNDER_REVIEW: 'info', BLOCKED: 'success' }[res.data.status];
       toast(res.message, tone, 'Fraud detection result');
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
@@ -162,7 +163,7 @@ export default function FrauderConsole() {
 
   return (
     <>
-      <PageHead title="Frauder console" subtitle="You type every attacker detail yourself. The SQL fraud engine decides, and then the account owner is asked “Was this you?”.">
+      <PageHead title="Frauder console" subtitle="You type every attacker detail yourself. If any of the 9 SQL rules fires, the payment is held and the account owner decides: YES pays, NO blocks.">
         <Link to="/frauder/history" className="btn btn-ghost">Attempt history</Link>
         <button className="btn btn-danger-soft" onClick={() => setConfirmReset(true)}>↺ Reset fraud attempts</button>
       </PageHead>
@@ -277,9 +278,9 @@ export default function FrauderConsole() {
                 : `Attempt Transaction${form.amount ? ` · ${money(form.amount)}` : ''}${victim ? ` from ${victim.name.split(' ')[0]}’s account` : ''}`}
             </button>
             <p className="small muted">
-              If the engine scores Review, the owner gets “Was this transaction initiated by you?” – log in as them to answer.
-              Unanswered requests expire after {ctx.policy.confirmation_expiry_minutes} min ({ctx.policy.expiry_action === 'HOLD' ? 'sent to the fraud team' : 'blocked'}).
-              {ctx.policy.hard_block_rules.length > 0 && ` Hard-block rules a YES cannot override: ${ctx.policy.hard_block_rules.join(', ')}.`}
+              If any rule fires (whatever the score), no money moves: the owner gets “Security Verification Required” – log in as them to answer YES or NO.
+              Unanswered requests expire after {ctx.policy.confirmation_expiry_minutes} min ({ctx.policy.expiry_action === 'HOLD' ? 'sent to the fraud team' : ctx.policy.expiry_action === 'BLOCK' ? 'blocked' : 'expired, never authorized'}).
+              {ctx.policy.hard_block_rules.length > 0 && ` Absolute restrictions (blocked, a YES cannot authorize): ${ctx.policy.hard_block_rules.join(', ')}.`}
             </p>
           </div>
         </form>
@@ -298,7 +299,7 @@ export default function FrauderConsole() {
 
       {/* Rule guidance – text only */}
       <h2 className="mt-24">Test the 9 Fraud Detection Rules</h2>
-      <p className="muted small mt-8">What to type for each rule, using the live thresholds. Nothing is filled in for you, and the backend still decides. On its own a rule may stay below the review threshold (40) – combine signals to reach Review or Block.</p>
+      <p className="muted small mt-8">What to type for each rule, using the live thresholds. Nothing is filled in for you, and the backend still decides. One triggered rule is enough to hold the payment for the owner’s answer; combining rules raises the risk score.</p>
       <div className="grid grid-3 mt-16">
         {guide.map((g) => (
           <div key={g.code} className="card scenario-card">
@@ -307,7 +308,7 @@ export default function FrauderConsole() {
               <span className="small muted">weight {g.weight}{!g.active && ' · disabled'}</span>
             </div>
             <p className="small">{g.hint}</p>
-            {g.hard_block && <span className="badge b-red" style={{ alignSelf: 'flex-start' }}>Hard block – a YES cannot override</span>}
+            {g.hard_block && <span className="badge b-red" style={{ alignSelf: 'flex-start' }}>Absolute restriction – a YES cannot authorize</span>}
           </div>
         ))}
       </div>

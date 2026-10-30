@@ -283,21 +283,22 @@ def _timeline(txn):
              'detail': ', '.join(t['code'] for t in fired) or 'none'},
             {'at': first.created_at, 'kind': 'engine', 'label': 'Risk score calculated',
              'detail': f'min(100, {" + ".join(str(t["weight"]) for t in fired) or "0"}) = {first.risk_score}'},
-            {'at': first.created_at, 'kind': 'decision', 'label': 'Engine decision', 'detail': first.decision},
+            {'at': first.created_at, 'kind': 'decision', 'label': 'Risk band (recorded)',
+             'detail': f'{first.decision} – ' + ('the account owner decides (YES/NO)' if fired else 'no rule triggered: normal payment')},
         ]
     if txn.confirmation_status:
         items.append({'at': txn.decided_at or txn.created_at, 'kind': 'confirm',
                       'label': f'Confirmation requested from {owner}',
-                      'detail': f'“Was this transaction initiated by you?” – answer by '
+                      'detail': f'“Security Verification Required – did you initiate this transaction?” – answer by '
                                 f'{txn.confirmation_expires_at:%H:%M}' if txn.confirmation_expires_at else ''})
         if txn.confirmation_responded_at:
             items.append({'at': txn.confirmation_responded_at, 'kind': 'confirm',
                           'label': f'{owner} answered {txn.confirmation_response}',
                           'detail': 'Not me → blocked immediately' if txn.confirmation_response == 'NO'
-                          else 'It was me → OTP + password verification, then every rule re-checked'})
+                          else 'Yes, I initiated it → re-validated and authorized'})
         if txn.confirmation_status == 'EXPIRED':
             items.append({'at': txn.confirmation_expires_at, 'kind': 'confirm', 'label': 'Confirmation expired',
-                          'detail': 'No answer in time – never approved automatically'})
+                          'detail': 'No answer in time – EXPIRED, never authorized automatically'})
     for later in assessments[1:]:
         items.append({'at': later.created_at, 'kind': 'engine', 'label': 'Re-evaluated',
                       'detail': f'{later.assessment_type.replace("_", " ").lower()}: score {later.risk_score} → '
@@ -313,7 +314,7 @@ def _timeline(txn):
                             else 'Waiting – no money moved yet' if txn.status == 'UNDER_REVIEW' else 'Money not moved'),
                   'detail': txn.final_reason or {
                       'COMPLETED': 'Sender debited and receiver credited in one database transaction.',
-                      'UNDER_REVIEW': f'Held until {owner} answers and every rule is re-checked.',
+                      'UNDER_REVIEW': f'Held until {owner} answers YES (authorize) or NO (block).',
                   }.get(txn.status, 'Neither balance changed.')})
     return [{**i, 'at': i['at'].isoformat(timespec='seconds') if i['at'] else None} for i in items]
 
@@ -433,7 +434,7 @@ def transfer(frauder, data, idempotency_key):
                                remarks='Frauder attempt', idempotency_key=idempotency_key,
                                device_id=device.id, ip=details['ip_address'], location_id=details['location_id'],
                                simulated=True, scenario_code=SCENARIO_CODE, fraud_label=True, txn_time=txn_time,
-                               simulated_details=_stored(details))
+                               simulated_details=_stored(details), owner_must_confirm=True)
     write_audit('FRAUDER_TRANSFER_ATTEMPT', 'transaction', txn.id,
                 {'amount': str(amount), 'decision': txn.decision, 'score': txn.risk_score,
                  'simulated_inputs': _stored(details)}, actor=frauder)

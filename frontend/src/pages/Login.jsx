@@ -82,9 +82,9 @@ export default function Login() {
           ))}
         </div>
         <div className="row wrap small">
-          <span className="badge b-green">0–39 Approved</span>
-          <span className="badge b-amber">40–69 Review</span>
-          <span className="badge b-red">70–100 Blocked</span>
+          <span className="badge b-green">No rule → Successful</span>
+          <span className="badge b-amber">Any rule → owner confirms</span>
+          <span className="badge b-red">Owner says NO → Blocked</span>
         </div>
       </section>
 

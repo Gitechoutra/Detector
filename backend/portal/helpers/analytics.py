@@ -34,7 +34,7 @@ def summary(start=None, end=None, source=None):
                SUM(t.status = 'COMPLETED')    AS approved,
                SUM(t.status = 'UNDER_REVIEW') AS under_review,
                SUM(t.status = 'BLOCKED')      AS blocked,
-               SUM(t.status IN ('DECLINED','CANCELLED')) AS declined,
+               SUM(t.status IN ('DECLINED','CANCELLED','EXPIRED')) AS declined,
                SUM(ra.decision <> 'APPROVED') AS flagged,
                COALESCE(SUM(t.amount), 0)     AS volume,
                COALESCE(SUM(CASE WHEN t.status = 'BLOCKED' THEN t.amount END), 0) AS blocked_amount

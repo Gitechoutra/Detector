@@ -105,49 +105,107 @@ def test_qr_and_bank_transfer_methods(client, app):
     assert balance(app, 'priya@demo.bank') == Decimal('25550')
 
 
-def test_step_up_mitigates_identity_rules_and_releases(client, app):
+def _answer(client, headers, txn_id, response):
+    return client.post(f'/api/transactions/{txn_id}/confirmation', headers=headers, json={'response': response})
+
+
+def _hand_to_analyst(app, client, headers, txn_id):
+    """No answer in time under the HOLD policy: the payment goes to the fraud team."""
+    with app.app_context():
+        db.session.get(SystemSetting, 'CONFIRMATION_EXPIRY_ACTION').setting_value = 'HOLD'
+        txn = db.session.get(Transaction, txn_id)
+        txn.confirmation_expires_at = txn.confirmation_expires_at.replace(year=2000)
+        db.session.commit()
+        db.session.remove()
+    client.get('/api/user/dashboard', headers=headers)
+
+
+def test_yes_authorizes_a_held_payment_whatever_the_score(client, app):
     login(client, 'rahul@demo.bank', device='usual-phone')
     headers = login(client, 'rahul@demo.bank', device='new-laptop')      # untrusted device
     data = send(client, headers, 30000).get_json()['data']
-    assert data['status'] == 'UNDER_REVIEW'
-    assert {r['code'] for r in data['rules']} == {'R4', 'R9'}            # 20 + 45 = 65
+    assert data['status'] == 'UNDER_REVIEW' and data['display_status'] == 'USER_CONFIRMATION_PENDING'
+    assert {r['code'] for r in data['rules']} == {'R4', 'R9'} and data['risk_score'] == 65
+    assert balance(app, 'rahul@demo.bank') == Decimal('250000')
 
-    otp = _otp_from_sms(client, headers, data['id'])
-    res = client.post(f"/api/transactions/{data['id']}/verification/confirm", headers=headers,
-                      json={'otp': otp, 'password': 'Rahul@123'})
-    result = res.get_json()['data']
-    assert res.status_code == 200 and result['outcome'] == 'released'
-    assert {m['code'] for m in result['mitigations']} == {'R4', 'R9'}
+    res = _answer(client, headers, data['id'], 'YES')
+    body = res.get_json()
+    assert res.status_code == 200 and body['data']['outcome'] == 'authorized'
+    assert body['message'] == 'Transaction successfully authorized. The amount has been transferred to the Receiver.'
+    txn = body['data']['transaction']
+    assert txn['display_status'] == 'SUCCESSFUL' and txn['outcome_label'] == 'USER AUTHORIZED – PAYMENT SUCCESSFUL'
+    assert txn['risk_score'] == 65 and {r['code'] for r in txn['rules']} == {'R4', 'R9'}   # kept for investigation
     assert balance(app, 'rahul@demo.bank') == Decimal('220000')
     assert balance(app, 'priya@demo.bank') == Decimal('55000')
 
 
-def test_step_up_does_not_bypass_behavioural_rules(client, app):
-    with app.app_context():                       # R6 not hard-blocking: test the escalation path
-        db.session.get(SystemSetting, 'CONFIRMATION_HARD_BLOCK_RULES').setting_value = ''
+def test_otp_step_up_is_not_used_for_a_pending_confirmation(client):
+    headers = login(client, 'rahul@demo.bank')
+    data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    res = client.post(f"/api/transactions/{data['id']}/verification/start", headers=headers)
+    assert res.status_code == 409 and res.get_json()['error']['code'] == 'USE_CONFIRMATION'
+
+
+def test_yes_with_insufficient_balance_is_not_processed(client, app):
+    headers = login(client, 'rahul@demo.bank')
+    data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    with app.app_context():
+        Account.query.filter_by(upi_id='rahul@fsbank').first().balance = Decimal('5000')
+        db.session.commit()
+        db.session.remove()
+    result = _answer(client, headers, data['id'], 'YES').get_json()['data']
+    assert result['outcome'] == 'blocked' and result['transaction']['status'] == 'BLOCKED'
+    assert 'lower than the amount' in result['transaction']['final_reason']
+    assert balance(app, 'rahul@demo.bank') == Decimal('5000')
+    assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
+
+
+def test_yes_on_a_frozen_receiver_is_not_processed(client, app):
+    headers = login(client, 'rahul@demo.bank')
+    data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    with app.app_context():
+        Account.query.filter_by(upi_id='quickcash@fsbank').first().status = 'FROZEN'
+        db.session.commit()
+        db.session.remove()
+    result = _answer(client, headers, data['id'], 'YES').get_json()['data']
+    assert result['outcome'] == 'blocked' and 'can no longer accept payments' in result['transaction']['final_reason']
+    assert balance(app, 'rahul@demo.bank') == Decimal('250000')
+
+
+def test_absolute_restriction_rule_blocks_without_asking(client, app):
+    with app.app_context():
+        db.session.get(SystemSetting, 'CONFIRMATION_HARD_BLOCK_RULES').setting_value = 'R6'
         db.session.commit()
         db.session.remove()
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
-    otp = _otp_from_sms(client, headers, data['id'])
-    result = client.post(f"/api/transactions/{data['id']}/verification/confirm", headers=headers,
-                         json={'otp': otp, 'password': 'Rahul@123'}).get_json()['data']
-    # R6 (watchlist) is not about identity, so a correct OTP cannot release it.
-    assert result['outcome'] == 'escalated' and result['risk_score'] == 50
+    assert data['status'] == 'BLOCKED' and data['confirmation'] is None
+    assert 'absolute security restriction' in data['final_reason']
+    assert _answer(client, headers, data['id'], 'YES').status_code == 409
     assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
-    again = client.post(f"/api/transactions/{data['id']}/verification/start", headers=headers)
-    assert again.status_code == 409
 
+
+def test_high_score_still_waits_for_the_owner(client, app):
     analyst = login(client, 'analyst@demo.bank')
-    res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
-                      json={'action': 'APPROVE', 'notes': 'Customer confirmed by phone'})
-    assert res.status_code == 200 and res.get_json()['data']['outcome'] == 'released'
-    assert balance(app, 'quickcash@demo.bank') == Decimal('15000')
-
-
-def test_wrong_otp_three_times_declines(client, app):
+    client.put('/api/detection/rules/R6', headers=analyst, json={'weight': 80})
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    assert data['risk_score'] == 80 and data['decision'] == 'BLOCKED'          # the band is still recorded
+    assert data['display_status'] == 'USER_CONFIRMATION_PENDING'
+    res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
+                      json={'action': 'APPROVE'})
+    assert res.status_code == 409 and res.get_json()['error']['code'] == 'AWAITING_OWNER'
+    assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
+
+
+def test_wrong_otp_three_times_declines_legacy_step_up(client, app):
+    """The OTP flow is kept for payments confirmed under the earlier workflow."""
+    headers = login(client, 'rahul@demo.bank')
+    data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    with app.app_context():
+        db.session.get(Transaction, data['id']).confirmation_status = 'CONFIRMED'
+        db.session.commit()
+        db.session.remove()
     _otp_from_sms(client, headers, data['id'])
     codes = []
     for _ in range(3):
@@ -161,23 +219,10 @@ def test_wrong_otp_three_times_declines(client, app):
     assert balance(app, 'rahul@demo.bank') == Decimal('250000')
 
 
-def test_blocked_payment_stays_declined(client, app):
-    analyst = login(client, 'analyst@demo.bank')
-    client.put('/api/detection/rules/R6', headers=analyst, json={'weight': 80})
-    headers = login(client, 'rahul@demo.bank')
-    data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
-    assert data['status'] == 'BLOCKED' and data['risk_score'] == 80
-    assert client.post(f"/api/transactions/{data['id']}/verification/start", headers=headers).status_code == 409
-    res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
-                      json={'action': 'APPROVE'})
-    assert res.status_code == 409
-    assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
-
-
 def test_analyst_cannot_approve_when_reevaluation_blocks(client, app):
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
-    assert data['status'] == 'UNDER_REVIEW'
+    _hand_to_analyst(app, client, headers, data['id'])
     analyst = login(client, 'analyst@demo.bank')
     client.put('/api/detection/rules/R6', headers=analyst, json={'weight': 90})
     res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
@@ -191,6 +236,7 @@ def test_analyst_cannot_approve_when_reevaluation_blocks(client, app):
 def test_analyst_reject_confirms_fraud(client, app):
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
+    _hand_to_analyst(app, client, headers, data['id'])
     analyst = login(client, 'analyst@demo.bank')
     res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
                       json={'action': 'REJECT', 'notes': 'Mule account'})
@@ -201,11 +247,11 @@ def test_analyst_reject_confirms_fraud(client, app):
         db.session.remove()
 
 
-def test_customer_can_cancel_held_payment(client):
+def test_pending_confirmation_cannot_be_cancelled_only_answered(client):
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
     res = client.post(f"/api/transactions/{data['id']}/cancel", headers=headers)
-    assert res.status_code == 200 and res.get_json()['data']['status'] == 'CANCELLED'
+    assert res.status_code == 409 and res.get_json()['error']['code'] == 'USE_CONFIRMATION'
 
 
 def test_failure_mid_pipeline_rolls_everything_back(client, app, monkeypatch):

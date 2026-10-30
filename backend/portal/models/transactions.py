@@ -73,20 +73,30 @@ class Transaction(db.Model):
         """One label shared by the User, Receiver, Frauder and Detection screens."""
         response, status = self.confirmation_response, self.status
         if status == 'COMPLETED':
-            return 'USER CONFIRMED – SUCCESSFUL' if response == 'YES' else 'SUCCESSFUL'
+            return 'USER AUTHORIZED – PAYMENT SUCCESSFUL' if response == 'YES' else 'SUCCESSFUL'
         if status == 'BLOCKED':
             if response == 'NO':
-                return 'USER DENIED – BLOCKED'
+                return 'USER DENIED – PAYMENT BLOCKED'
             if self.confirmation_status == 'EXPIRED':
-                return 'NOT VERIFIED IN TIME – BLOCKED' if response == 'YES' else 'NO RESPONSE – BLOCKED'
+                return 'NO RESPONSE – BLOCKED'
             if response == 'YES':
-                return 'USER CONFIRMED – STILL BLOCKED'
+                return 'USER AUTHORIZED – STILL BLOCKED'
             return 'BLOCKED'
+        if status == 'EXPIRED':
+            return 'EXPIRED – NOT AUTHORIZED'
         if status == 'UNDER_REVIEW':
             if self.review_stage == 'AWAITING_ANALYST':
                 return 'WITH FRAUD TEAM'
-            return 'USER CONFIRMED – VERIFYING' if response == 'YES' else 'AWAITING USER CONFIRMATION'
+            return 'USER AUTHORIZED – VERIFYING' if response == 'YES' else 'USER CONFIRMATION PENDING'
         return status
+
+    def display_status(self):
+        """The status names shown to people. COMPLETED / UNDER_REVIEW stay the stored values."""
+        if self.status == 'COMPLETED':
+            return 'SUCCESSFUL'
+        if self.status == 'UNDER_REVIEW' and self.confirmation_status == 'PENDING':
+            return 'USER_CONFIRMATION_PENDING'
+        return self.status
 
     def to_dict(self, view='detection'):
         data = {
@@ -108,6 +118,7 @@ class Transaction(db.Model):
             'completed_at': iso(self.completed_at),
             'final_reason': self.final_reason,
             'outcome_label': self.outcome_label(),
+            'display_status': self.display_status(),
             'confirmation': self.confirmation_dict(),
             'city': self.location.city if self.location else None,
             'sender': self.sender_account.counterparty_dict(),
@@ -126,5 +137,5 @@ class Transaction(db.Model):
             })
         else:
             # Customers see which checks flagged the payment, not the weights/evidence.
-            data['rules'] = [{'code': h.rule_code, 'reason': h.reason} for h in hits]
+            data['rules'] = [{'code': h.rule_code, 'name': h.rule.name, 'reason': h.reason} for h in hits]
         return data

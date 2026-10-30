@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from portal.extensions import db
 from portal.models import Account, Device, FraudRule, Location, User, now
-from portal.helpers.payment_engine import send_money
+from portal.helpers.payment_engine import respond_to_confirmation, send_money
 
 from .conftest import login, send
 
@@ -96,8 +96,10 @@ def test_r8_dormant_reactivation(ctx):
     account = User.query.filter_by(email='rahul@demo.bank').first().primary_account
     account.last_txn_at = now() - timedelta(days=200)
     db.session.commit()
-    assert 'R8' in _codes(_pay('rahul@demo.bank', 30000, device=dev))
-    # The completed payment reactivates the account: the next one is not dormant.
+    first = _pay('rahul@demo.bank', 30000, device=dev)
+    assert 'R8' in _codes(first) and first.status == 'UNDER_REVIEW'
+    # Once the owner authorizes it, the completed payment reactivates the account.
+    respond_to_confirmation(User.query.filter_by(email='rahul@demo.bank').first(), first.id, 'YES')
     assert 'R8' not in _codes(_pay('rahul@demo.bank', 30000, device=dev))
 
 
@@ -143,7 +145,9 @@ def test_score_is_capped_at_100_and_blocks(client, app):
     detail = client.get(f"/api/detection/transactions/{data['id']}", headers=analyst).get_json()['data']
     assert {'R1', 'R4', 'R6', 'R8', 'R9'} <= {r['code'] for r in detail['rules']}
     assert sum(r['weight'] for r in detail['rules']) > 100
-    assert data['risk_score'] == 100 and data['status'] == 'BLOCKED'
+    # Score 100 is in the BLOCKED band, but every flagged payment waits for its owner.
+    assert data['risk_score'] == 100 and data['decision'] == 'BLOCKED'
+    assert data['display_status'] == 'USER_CONFIRMATION_PENDING'
 
 
 def test_disabled_rule_does_not_fire_and_weights_are_configurable(client):
@@ -153,7 +157,7 @@ def test_disabled_rule_does_not_fire_and_weights_are_configurable(client):
     assert send(client, headers, 100, upi='quickcash@fsbank').get_json()['data']['status'] == 'COMPLETED'
     client.put('/api/detection/rules/R6', headers=analyst, json={'is_active': True, 'weight': 35})
     data = send(client, headers, 100, upi='quickcash@fsbank').get_json()['data']
-    assert data['risk_score'] == 35 and data['status'] == 'COMPLETED'
+    assert data['risk_score'] == 35 and data['status'] == 'UNDER_REVIEW'
 
 
 def test_rule_parameters_are_validated_and_applied(client):
@@ -176,7 +180,7 @@ def test_score_bands_are_configurable(client):
     assert res.status_code == 200
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 100, upi='quickcash@fsbank').get_json()['data']
-    assert data['risk_score'] == 50 and data['status'] == 'COMPLETED'
+    assert data['risk_score'] == 50 and data['decision'] == 'APPROVED' and data['status'] == 'UNDER_REVIEW'
 
 
 def test_every_rule_seeded_with_defaults(ctx):

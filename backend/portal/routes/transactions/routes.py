@@ -14,7 +14,7 @@ def pending_for(user):
     return (Transaction.query.filter(Transaction.sender_account_id == user.primary_account.id,
                                      Transaction.status == 'UNDER_REVIEW',
                                      Transaction.review_stage == 'AWAITING_CUSTOMER',
-                                     Transaction.confirmation_status.in_(('PENDING', 'CONFIRMED')))
+                                     Transaction.confirmation_status == 'PENDING')
             .order_by(Transaction.txn_time.desc()).all())
 
 
@@ -32,8 +32,8 @@ def confirmation_card(txn):
 
 
 MESSAGES = {
-    'COMPLETED': 'Payment approved and completed.',
-    'UNDER_REVIEW': 'Payment is on hold for a security check. Please verify it.',
+    'COMPLETED': 'Payment successful.',
+    'UNDER_REVIEW': 'Security Verification Required: confirm whether you initiated this transaction.',
     'BLOCKED': 'Payment blocked by fraud detection. No money was debited.',
 }
 
@@ -106,7 +106,4 @@ def respond(txn_id):
     """Body: {"response": "YES" | "NO"}. The responder is the logged-in user;
     ownership, expiry and duplicates are all checked on the server."""
     result = payment_engine.respond_to_confirmation(g.current_user, txn_id, json_body().get('response'), client_ip())
-    if result['response'] == 'NO':
-        return ok(result, 'Blocked. No money left your account and our fraud team has been alerted.')
-    return ok(result, 'Thanks. Enter the OTP and your password – every fraud rule is checked again before any '
-                      'money moves.')
+    return ok(result, result['message'])

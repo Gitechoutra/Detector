@@ -27,7 +27,7 @@ const PIPELINE = [
 
 const ROLES = [
   { key: 'USER', icon: '💸', tone: 'blue', title: 'User', who: 'The customer who pays',
-    points: ['Send money by UPI, QR code or bank transfer', 'See instantly if a payment is approved, held or blocked', 'Verify held payments with OTP + password'] },
+    points: ['Send money by UPI, QR code or bank transfer', 'See instantly if a payment is sent or held', 'Answer YES or NO when a payment is flagged'] },
   { key: 'RECEIVER', icon: '📥', tone: 'green', title: 'Receiver', who: 'The customer who gets paid',
     points: ['See every incoming payment and its status', 'Money is credited only after approval', 'Share a UPI ID or downloadable QR code'] },
   { key: 'DETECTION', icon: '🛡️', tone: 'purple', title: 'Detection System', who: 'The fraud team',
@@ -40,13 +40,13 @@ const EXAMPLES = [
   { amount: '₹1,250', to: 'FreshMart Grocery', method: 'UPI', city: 'Chennai', rules: [], score: 0, status: 'COMPLETED',
     note: 'Usual phone, usual amount – sent instantly.' },
   { amount: '₹10,000', to: 'QuickCash Services', method: 'UPI', city: 'Mumbai', rules: ['R6'], score: 50, status: 'UNDER_REVIEW',
-    note: 'Receiver is on the watchlist – held until verified.' },
+    note: 'Receiver is on the watchlist – held until the owner answers YES or NO.' },
   { amount: '₹75,000', to: 'Rohan Traders', method: 'Bank Transfer', city: 'Kolkata', rules: ['R1', 'R4', 'R9'], score: 95, status: 'BLOCKED',
-    note: 'New device after a phishing login – blocked, no money left.' },
+    note: 'New device after a phishing login – the owner answered NO: blocked, no money left.' },
 ];
 
 const SECURITY = [
-  ['🔐', 'Step-up verification', 'Held payments need an OTP and password. Every rule is checked again afterwards, so a code alone can never push fraud through.'],
+  ['🔐', 'Owner authorization', 'Any flagged payment waits for its owner: YES sends it after a final balance check, NO blocks it, no answer lets it expire.'],
   ['⚛️', 'All-or-nothing payments', 'Saving, scoring and moving money happen in one database transaction. A crash halfway changes nothing.'],
   ['🔁', 'No double payments', 'Clicking “Send” twice still creates exactly one payment.'],
   ['🔗', 'Tamper-evident audit trail', 'Every rule change and decision is hash-chained. The database refuses edits and deletes.'],
@@ -54,7 +54,7 @@ const SECURITY = [
   ['🧾', 'Fully explainable', 'Every flagged payment lists which rules fired and why. No black box.'],
 ];
 
-const decisionFor = (score) => (score >= 70 ? 'BLOCKED' : score >= 40 ? 'UNDER_REVIEW' : 'COMPLETED');
+const decisionFor = (score) => (score > 0 ? 'UNDER_REVIEW' : 'COMPLETED');
 
 function LivePaymentCard() {
   const [i, setI] = useState(0);
@@ -107,9 +107,9 @@ function ScoreCalculator() {
     return next;
   });
   const message = {
-    COMPLETED: 'Approved – the money moves instantly and the receiver is credited.',
-    UNDER_REVIEW: 'Held for review – nothing is debited until the customer verifies and every rule is re-checked.',
-    BLOCKED: 'Blocked – declined immediately and a high-priority alert goes to the fraud team.',
+    COMPLETED: 'No rule fired – the money moves instantly and the receiver is credited.',
+    UNDER_REVIEW: 'Flagged – nothing is debited. The owner is asked “Did you initiate this transaction?”: YES sends it, NO blocks it.',
+    BLOCKED: 'Blocked – no money moved.',
   }[status];
   return (
     <div className="grid grid-main lp-calc">
@@ -139,9 +139,8 @@ function ScoreCalculator() {
         <div className="mt-16"><StatusBadge status={status} /></div>
         <p className="mt-8">{message}</p>
         <div className="lp-bands mt-16">
-          <span className={status === 'COMPLETED' ? 'active' : ''}>0–39 Approve</span>
-          <span className={status === 'UNDER_REVIEW' ? 'active' : ''}>40–69 Review</span>
-          <span className={status === 'BLOCKED' ? 'active' : ''}>70–100 Block</span>
+          <span className={status === 'COMPLETED' ? 'active' : ''}>No rule → sent</span>
+          <span className={status === 'UNDER_REVIEW' ? 'active' : ''}>Any rule → owner decides</span>
         </div>
       </div>
     </div>
@@ -222,9 +221,9 @@ export default function Landing() {
             ))}
           </div>
           <div className="grid grid-3 mt-24">
-            <div className="lp-outcome tone-green"><strong>✓ Approved</strong><span>Score 0–39. Money moves instantly and the receiver is credited.</span></div>
-            <div className="lp-outcome tone-amber"><strong>⏸ Under review</strong><span>Score 40–69. Held, nothing debited. Customer verifies; rules re-checked.</span></div>
-            <div className="lp-outcome tone-red"><strong>⛔ Blocked</strong><span>Score 70–100. Declined immediately; fraud team alerted.</span></div>
+            <div className="lp-outcome tone-green"><strong>✓ Successful</strong><span>No rule fired, or the owner answered YES. Sender debited, receiver credited.</span></div>
+            <div className="lp-outcome tone-amber"><strong>🔐 Confirmation pending</strong><span>Any rule fired. Held, nothing debited, until the owner answers.</span></div>
+            <div className="lp-outcome tone-red"><strong>⛔ Blocked</strong><span>The owner answered NO. No money moved; fraud team alerted.</span></div>
           </div>
         </div>
       </section>
