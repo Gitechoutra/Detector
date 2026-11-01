@@ -13,7 +13,8 @@ from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError
 from portal.helpers.helpers import notify, raise_alert, security_event, setting
 
-DASHBOARDS = {'USER': '/user', 'RECEIVER': '/receiver', 'DETECTION': '/detection', 'FRAUDER': '/frauder'}
+# RECEIVER is retired (customers send and receive with one USER login); kept so old rows still resolve.
+DASHBOARDS = {'USER': '/user', 'RECEIVER': '/user', 'DETECTION': '/detection', 'FRAUDER': '/frauder'}
 
 
 def resolve_location_id(location_id, user):
@@ -163,7 +164,7 @@ def login(email, password, fingerprint, device_name, ip, location_id=None):
 # ── Self-registration (customers only) ──────────────────────────────────────
 
 # Staff roles (DETECTION, FRAUDER) are never self-service: they are seeded.
-SELF_REGISTER_ROLES = ('USER', 'RECEIVER')
+SELF_REGISTER_ROLES = ('USER',)
 BRANCH_IFSC = 'FSBK0000001'
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
@@ -195,9 +196,10 @@ def register(full_name, email, phone, password, role_code, location_id, ip):
     email = email.strip().lower()
     if not EMAIL_RE.match(email):
         raise ApiError('Enter a valid email address.', 422, 'VALIDATION_ERROR', {'field': 'email'})
+    # One customer account sends and receives; older clients may still send RECEIVER.
+    role_code = 'USER' if role_code in (None, '', 'RECEIVER') else role_code
     if role_code not in SELF_REGISTER_ROLES:
-        raise ApiError('You can open a User (send money) or Receiver (receive money) account.', 422,
-                       'VALIDATION_ERROR', {'field': 'role'})
+        raise ApiError('You can open a customer account only.', 422, 'VALIDATION_ERROR', {'field': 'role'})
     if phone and not re.fullmatch(r'[6-9]\d{9}', phone):
         raise ApiError('Enter a valid 10-digit mobile number.', 422, 'VALIDATION_ERROR', {'field': 'phone'})
     _check_password(password)
@@ -211,8 +213,8 @@ def register(full_name, email, phone, password, role_code, location_id, ip):
                 phone=phone, password_hash=generate_password_hash(password), home_location_id=int(location_id))
     db.session.add(user)
     db.session.flush()
-    # Simulated bank: senders get a welcome balance so they can try payments straight away.
-    opening = Decimal(setting('NEW_USER_OPENING_BALANCE')) if role_code == 'USER' else Decimal('0')
+    # Simulated bank: every customer gets a welcome balance so they can try payments straight away.
+    opening = Decimal(setting('NEW_USER_OPENING_BALANCE'))
     account = Account(user_id=user.id, account_number=_unique_account_number(), ifsc=BRANCH_IFSC,
                       upi_id=_unique_upi(email), qr_token=secrets.token_hex(8), balance=opening,
                       opening_balance=opening)

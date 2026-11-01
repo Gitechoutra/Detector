@@ -17,7 +17,8 @@ export default function UserDashboard() {
 
   return (
     <>
-      <PageHead title={`Hello, ${data.user.full_name.split(' ')[0]} 👋`} subtitle="Your account, payments and security at a glance.">
+      <PageHead title={`Hello, ${data.user.full_name.split(' ')[0]} 👋`} subtitle="Send and receive money – every payment is checked by the fraud engine.">
+        <Link to="/user/qr" className="btn btn-ghost">🔳 Receive · My QR</Link>
         <Link to="/user/send" className="btn btn-primary">💸 Send money</Link>
       </PageHead>
 
@@ -41,11 +42,12 @@ export default function UserDashboard() {
       </div>
 
       <div className="grid grid-4 mt-16">
-        <StatCard icon="✓" tone="green" label="Successful payments" value={stats.completed} sub={`${money(stats.total_sent)} sent`} />
+        <StatCard icon="↗" tone="blue" label="Money sent" value={money(stats.total_sent)} sub={`${stats.completed} successful payment${stats.completed === 1 ? '' : 's'}`} />
+        <StatCard icon="↙" tone="green" label="Money received" value={money(stats.total_received)} sub={`${stats.received} credited payment${stats.received === 1 ? '' : 's'}`} />
         <StatCard icon="🔐" tone="amber" label="Awaiting your answer" value={confirmations.length} sub="Held, not debited" />
         <StatCard icon="⛔" tone="red" label="Blocked" value={stats.blocked} sub="Denied or stopped – no money moved" />
-        <StatCard icon="⌛" tone="slate" label="Expired / declined" value={stats.expired + stats.declined} sub="Never authorized" />
       </div>
+      <p className="muted small mt-8">⌛ {stats.expired + stats.declined} expired or declined (never authorized). Incoming money appears only once it passes the fraud checks and is credited.</p>
 
       {withTeam.length > 0 && (
         <div className="card mt-16">
@@ -72,7 +74,7 @@ export default function UserDashboard() {
           <h2>Recent activity</h2>
           <Link to="/user/transactions" className="small">View all →</Link>
         </div>
-        <TxnTable items={recent} onSelect={setSelected} emptyText="No payments yet – send your first one." />
+        <TxnTable items={recent} onSelect={setSelected} emptyText="No payments yet – send one, or share your QR to get paid." />
       </div>
 
       {selected && (

@@ -14,7 +14,7 @@ from .conftest import balance, login, send
 
 def test_demo_mode_info_and_resets(client, app):
     info = client.get('/api/demo/info').get_json()['data']
-    assert {c['role'] for c in info['credentials']} == {'USER', 'RECEIVER', 'DETECTION', 'FRAUDER'}
+    assert {c['role'] for c in info['credentials']} == {'USER', 'DETECTION', 'FRAUDER'}
     assert 'scenarios' not in info
     headers = login(client, 'rahul@demo.bank')
     send(client, headers, 1000)
@@ -69,7 +69,7 @@ def test_migrations_are_repeatable_without_duplicates_or_data_loss(client, app):
         db.session.commit()
         db.session.remove()
 
-        downgrade(revision='0001_create_schema')
+        downgrade(revision='147f95419251')
         upgrade()
         after = {t: db.session.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar() for t in before}
         assert after == before

@@ -1,3 +1,4 @@
+import pytest
 """Each of the nine rules, fired in isolation, plus scoring and configuration."""
 from datetime import timedelta
 from decimal import Decimal
@@ -7,6 +8,10 @@ from portal.models import Account, Device, FraudRule, Location, User, now
 from portal.helpers.payment_engine import respond_to_confirmation, send_money
 
 from .conftest import login, send
+
+# Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
+# the automatic policy is covered by test_auto_decisions.py.
+pytestmark = pytest.mark.usefixtures('owner_confirm')
 
 
 def _pay(email, amount, upi='priya@fsbank', when=None, city=None, device=None):

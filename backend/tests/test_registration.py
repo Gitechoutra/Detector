@@ -42,15 +42,22 @@ def test_new_user_registers_logs_in_and_can_pay(client, app):
     assert client.get('/api/user/security', headers=headers).get_json()['data']['devices'][0]['is_trusted']
 
 
-def test_new_receiver_starts_at_zero_and_can_be_paid(client, app):
+def test_one_customer_account_sends_and_receives(client, app):
+    # The old "Receiver" choice still works but opens the same User account (send and receive).
     email = _email('shop')
     data = _register(client, app, email=email, role='RECEIVER', full_name='Corner Shop').get_json()['data']
-    assert data['dashboard'] == '/receiver' and data['account']['balance'] == 0
+    assert data['dashboard'] == '/user' and data['user']['role'] == 'USER'
+    assert data['account']['balance'] == 50000
     login = client.post('/api/auth/login', json={'email': 'rahul@demo.bank', 'password': 'Rahul@123',
                                                  'device_id': 'r1'}).get_json()['data']
     paid = send(client, {'Authorization': 'Bearer ' + login['token']}, 700, upi=data['account']['upi_id'])
     assert paid.get_json()['data']['status'] == 'COMPLETED'
-    assert balance(app, email) == Decimal('700')
+    assert balance(app, email) == Decimal('50700')
+    shop = {'Authorization': 'Bearer ' + data['token']}
+    received = client.get('/api/receiver/payments', headers=shop).get_json()['data']['items']
+    assert [p['amount'] for p in received] == [700]
+    back = send(client, shop, 200, upi='rahul@fsbank')       # and the same login can send
+    assert back.get_json()['data']['status'] == 'COMPLETED'
 
 
 def test_registration_validation(client, app):

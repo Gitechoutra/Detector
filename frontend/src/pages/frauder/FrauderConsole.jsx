@@ -163,7 +163,7 @@ export default function FrauderConsole() {
 
   return (
     <>
-      <PageHead title="Frauder console" subtitle="You type every attacker detail yourself. If any of the 9 SQL rules fires, the payment is held and the account owner decides: YES pays, NO blocks.">
+      <PageHead title="Frauder console" subtitle="You type every attacker detail yourself. The 9 SQL rules score the attempt instantly: a low score goes through, a high score is blocked, and the review band waits for the account owner's YES or NO.">
         <Link to="/frauder/history" className="btn btn-ghost">Attempt history</Link>
         <button className="btn btn-danger-soft" onClick={() => setConfirmReset(true)}>↺ Reset fraud attempts</button>
       </PageHead>
@@ -278,7 +278,9 @@ export default function FrauderConsole() {
                 : `Attempt Transaction${form.amount ? ` · ${money(form.amount)}` : ''}${victim ? ` from ${victim.name.split(' ')[0]}’s account` : ''}`}
             </button>
             <p className="small muted">
-              If any rule fires (whatever the score), no money moves: the owner gets “Security Verification Required” – log in as them to answer YES or NO.
+              {ctx.policy.auto_decisions
+                ? `Decided instantly by the risk score: below ${ctx.policy.review_floor} → approved, ${ctx.policy.block_floor} or more → blocked. Scores in between are held and the owner gets “Security Verification Required” – log in as them to answer YES or NO.`
+                : 'If any rule fires (whatever the score), no money moves: the owner gets “Security Verification Required” – log in as them to answer YES or NO.'}{' '}
               Unanswered requests expire after {ctx.policy.confirmation_expiry_minutes} min ({ctx.policy.expiry_action === 'HOLD' ? 'sent to the fraud team' : ctx.policy.expiry_action === 'BLOCK' ? 'blocked' : 'expired, never authorized'}).
               {ctx.policy.hard_block_rules.length > 0 && ` Absolute restrictions (blocked, a YES cannot authorize): ${ctx.policy.hard_block_rules.join(', ')}.`}
             </p>

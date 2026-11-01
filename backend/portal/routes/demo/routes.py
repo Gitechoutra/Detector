@@ -14,6 +14,13 @@ def info():
     return ok(demo.info())
 
 
+@bp.post('/unlock')
+@demo_mode_required
+def unlock():
+    was_locked = demo.unlock_demo_user(json_body().get('email'))
+    return ok({'was_locked': was_locked}, 'Demo account unlocked. You can sign in again.')
+
+
 @bp.post('/reset-attempts')
 @demo_mode_required
 def reset_simulation():

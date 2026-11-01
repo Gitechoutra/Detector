@@ -14,6 +14,10 @@ from portal.models import Alert, FraudRule, SystemSetting, Transaction, User, no
 from .conftest import balance, login, send
 from .test_frauder import OPENING, fr, rules  # noqa: F401  (fr is a fixture)
 
+# Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
+# the automatic policy is covered by test_auto_decisions.py.
+pytestmark = pytest.mark.usefixtures('owner_confirm')
+
 DENIED_REASON = 'Account owner denied initiating this transaction.'
 YES_MESSAGE = 'Transaction successfully authorized. The amount has been transferred to the Receiver.'
 NO_MESSAGE = ('Transaction blocked successfully. You reported that this transaction was not initiated by you. '
@@ -307,7 +311,9 @@ def test_only_the_owner_can_answer(client, app, fr):
     url = f"/api/transactions/{attempt['id']}/confirmation"
     karan = login(client, 'karan@demo.bank')
     assert client.post(url, headers=karan, json={'response': 'NO'}).status_code == 404
-    for email in ('priya@demo.bank', 'analyst@demo.bank', 'frauder@demo.bank'):
+    # Another customer is a User too, so it is "not your payment" (404); staff roles are refused (403).
+    assert client.post(url, headers=login(client, 'priya@demo.bank'), json={'response': 'YES'}).status_code == 404
+    for email in ('analyst@demo.bank', 'frauder@demo.bank'):
         assert client.post(url, headers=login(client, email), json={'response': 'YES'}).status_code == 403
     assert client.post(url, json={'response': 'YES'}).status_code == 401
     rahul = login(client, 'rahul@demo.bank')
@@ -418,7 +424,8 @@ def test_manual_details_are_validated(client, fr):
 def test_context_fills_nothing_in(client, fr):
     ctx = client.get('/api/frauder/context', headers=fr.headers).get_json()['data']
     assert {'cities', 'device_types', 'scenarios', 'policy'} <= set(ctx)
-    assert ctx['policy'] == {'confirmation_expiry_minutes': 30, 'expiry_action': 'EXPIRE', 'hard_block_rules': []}
+    assert ctx['policy'] == {'confirmation_expiry_minutes': 30, 'expiry_action': 'EXPIRE', 'hard_block_rules': [],
+                             'auto_decisions': False, 'review_floor': 40, 'block_floor': 70}
     guide = client.get('/api/frauder/rule-guide', headers=fr.headers).get_json()['data']
     assert all('preset' not in g for g in guide)
 

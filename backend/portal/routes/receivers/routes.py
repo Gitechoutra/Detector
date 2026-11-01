@@ -4,9 +4,12 @@ from sqlalchemy import func
 from portal.extensions import db
 from portal.models import Notification, Transaction
 from portal.helpers.responses import ok
-from portal.helpers.security import RECEIVER, role_required
+from portal.helpers.security import USER, role_required
 from portal.helpers.validators import page_args, paginate
 from . import bp
+
+# Receiving money is part of every customer (USER) account; there is no separate
+# Receiver login any more.
 
 
 
@@ -22,7 +25,7 @@ def _incoming(txn):
 
 
 @bp.get('/dashboard')
-@role_required(RECEIVER)
+@role_required(USER)
 def dashboard():
     account = g.current_user.primary_account
     credited, received = db.session.query(func.count(Transaction.id),
@@ -39,7 +42,7 @@ def dashboard():
 
 
 @bp.get('/payments')
-@role_required(RECEIVER)
+@role_required(USER)
 def payments():
     account = g.current_user.primary_account
     query = _credited(account)

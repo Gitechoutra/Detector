@@ -26,7 +26,8 @@ from portal.extensions import db
 from portal.helpers.audit import write_audit
 from portal.helpers.auth import _clear_expired_lock, register_attempt
 from portal.helpers.helpers import security_event, setting
-from portal.helpers.payment_engine import expire_confirmations, hard_block_rules, send_money
+from portal.helpers.fraud_engine import band_floor
+from portal.helpers.payment_engine import auto_decisions, expire_confirmations, hard_block_rules, send_money
 from portal.helpers.responses import ApiError
 from portal.helpers.validators import parse_amount
 from portal.models import (Alert, Device, FraudRule, Location, LoginAttempt, RiskAssessment, SecurityEvent,
@@ -215,7 +216,9 @@ def context():
         'scenarios': [{'code': c, 'name': n} for c, n in SCENARIOS],
         'policy': {'confirmation_expiry_minutes': setting('CONFIRMATION_EXPIRY_MINUTES'),
                    'expiry_action': setting('CONFIRMATION_EXPIRY_ACTION', str).upper(),
-                   'hard_block_rules': sorted(hard_block_rules())},
+                   'hard_block_rules': sorted(hard_block_rules()),
+                   'auto_decisions': auto_decisions(),
+                   'review_floor': band_floor('REVIEW'), 'block_floor': band_floor('BLOCKED')},
     }
 
 

@@ -11,7 +11,7 @@ from . import bp
 
 @bp.post('/register')
 def register():
-    """Public sign-up for customers (User / Receiver), followed by a normal login
+    """Public sign-up for customers (one User account sends and receives), followed by a normal login
     so the new device and location are recorded like any other sign-in."""
     try:
         data = json_body()

@@ -17,9 +17,9 @@ OPENED_DAYS_AGO = {'suresh@demo.bank': 400}
 USERS = [
     ('rahul@demo.bank', 'Rahul Sharma', 'USER', 'Rahul@123', 'Mumbai', '9800000001', 'rahul', 250000, 1, 0),
     ('karan@demo.bank', 'Karan Mehta', 'USER', 'Karan@123', 'Delhi', '9800000002', 'karan', 150000, 1, 0),
-    ('priya@demo.bank', 'Priya Patel', 'RECEIVER', 'Priya@123', 'Pune', '9800000003', 'priya', 25000, 1, 0),
-    ('amit@demo.bank', 'Amit Verma', 'RECEIVER', 'Amit@123', 'Delhi', '9800000004', 'amit', 10000, 1, 0),
-    ('quickcash@demo.bank', 'QuickCash Services', 'RECEIVER', 'Quick@123', 'Kolkata', '9800000005',
+    ('priya@demo.bank', 'Priya Patel', 'USER', 'Priya@123', 'Pune', '9800000003', 'priya', 25000, 1, 0),
+    ('amit@demo.bank', 'Amit Verma', 'USER', 'Amit@123', 'Delhi', '9800000004', 'amit', 10000, 1, 0),
+    ('quickcash@demo.bank', 'QuickCash Services', 'USER', 'Quick@123', 'Kolkata', '9800000005',
      'quickcash', 5000, 1, 0),
     ('analyst@demo.bank', 'Detection Officer', 'DETECTION', 'Detect@123', 'Mumbai', '9800000006', None, None, 1, 0),
     ('frauder@demo.bank', 'Fraud Simulator', 'FRAUDER', 'Fraud@123', 'Mumbai', '9800000007', None, None, 1, 0),
@@ -36,6 +36,13 @@ def seed_users(conn):
                 'password_hash': generate_password_hash(password or secrets.token_urlsafe(32)),
                 'home_location_id': id_of(conn, 'locations', 'city', city), 'is_demo': is_demo,
                 'is_simulated': is_sim})
+        elif is_demo and password:
+            # A demo password typed straight into the DB is stored unhashed and
+            # can never match at login; re-hash it (real hashes look like method$salt$hash).
+            stored = conn.execute(sa.text('SELECT password_hash FROM users WHERE email = :e'), {'e': email}).scalar()
+            if stored.count('$') < 2:
+                conn.execute(sa.text('UPDATE users SET password_hash = :h WHERE email = :e'),
+                             {'h': generate_password_hash(password), 'e': email})
         if upi is None:
             continue
         user_id = id_of(conn, 'users', 'email', email)
@@ -50,7 +57,7 @@ def seed_users(conn):
         insert(conn, 'accounts', {
             'user_id': user_id, 'account_number': number, 'ifsc': f'FSBK0{100 + n:06d}',
             'upi_id': f'{upi}@fsbank', 'qr_token': secrets.token_hex(8),
-            'account_type': 'CURRENT' if role == 'RECEIVER' and is_sim else 'SAVINGS',
+            'account_type': 'CURRENT' if email == 'quickcash@demo.bank' else 'SAVINGS',
             'balance': balance, 'opening_balance': balance})
         if email in OPENED_DAYS_AGO:
             conn.execute(sa.text('UPDATE users SET created_at = NOW() - INTERVAL :d DAY WHERE id = :u'),

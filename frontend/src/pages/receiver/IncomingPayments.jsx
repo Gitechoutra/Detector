@@ -11,7 +11,7 @@ export default function IncomingPayments() {
 
   return (
     <>
-      <PageHead title="Incoming payments" subtitle="Payments credited to your account. Payments still being checked, or blocked, never appear here." />
+      <PageHead title="Money received" subtitle="Payments credited to your account. Payments still being checked, or blocked, never appear here." />
       <div className="card">
         <ErrorNote error={error} />
         {loading && !data ? <Loading /> : <TxnTable items={data?.items} perspective="receiver" onSelect={setSelected} emptyText="No payments match." />}

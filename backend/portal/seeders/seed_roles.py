@@ -1,8 +1,9 @@
 from portal.seeders.utils import exists, insert
 
 ROLES = [
-    ('USER', 'User', 'Bank customer who sends money manually.'),
-    ('RECEIVER', 'Receiver', 'Bank customer who receives money; credited only after approval.'),
+    ('USER', 'User', 'Bank customer who sends and receives money.'),
+    # Retired: customers now send and receive with one USER login. Kept for old references.
+    ('RECEIVER', 'Receiver (retired)', 'Merged into User: every customer can send and receive.'),
     ('DETECTION', 'Detection System', 'Fraud team: monitors transactions, reviews alerts, manages rules.'),
     ('FRAUDER', 'Frauder', 'Runs controlled fraud simulations to test the detection system.'),
 ]

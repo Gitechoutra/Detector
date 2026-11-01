@@ -5,7 +5,7 @@ from .conftest import login
 
 
 def test_all_four_roles_can_log_in(client):
-    expected = {'rahul@demo.bank': '/user', 'priya@demo.bank': '/receiver',
+    expected = {'rahul@demo.bank': '/user', 'priya@demo.bank': '/user',
                 'analyst@demo.bank': '/detection', 'frauder@demo.bank': '/frauder'}
     for email, dashboard in expected.items():
         res = client.post('/api/auth/login', json={'email': email, 'password': {
@@ -53,17 +53,16 @@ def test_first_device_trusted_second_device_flagged(client, app):
 
 def test_role_based_access_control(client):
     user = login(client, 'rahul@demo.bank')
-    receiver = login(client, 'priya@demo.bank')
+    payee = login(client, 'priya@demo.bank')   # a User too: customers send and receive
     detection = login(client, 'analyst@demo.bank')
     frauder = login(client, 'frauder@demo.bank')
 
     forbidden = [
         (user, 'get', '/api/detection/transactions'),
         (user, 'get', '/api/frauder/context'),
-        (user, 'get', '/api/receiver/dashboard'),
-        (receiver, 'post', '/api/transactions/send'),
-        (receiver, 'get', '/api/user/dashboard'),
-        (receiver, 'get', '/api/alerts'),
+        (payee, 'get', '/api/alerts'),
+        (detection, 'get', '/api/receiver/dashboard'),
+        (frauder, 'get', '/api/receiver/payments'),
         (detection, 'post', '/api/frauder/transfer'),
         (detection, 'post', '/api/transactions/send'),
         (frauder, 'get', '/api/detection/rules'),
@@ -73,7 +72,8 @@ def test_role_based_access_control(client):
         res = getattr(client, method)(path, headers=headers, json={})
         assert res.status_code == 403, (path, res.status_code)
 
-    allowed = [(user, '/api/user/dashboard'), (receiver, '/api/receiver/dashboard'),
+    allowed = [(user, '/api/user/dashboard'), (user, '/api/receiver/dashboard'), (payee, '/api/user/dashboard'),
+               (payee, '/api/receiver/payments'),
                (detection, '/api/detection/rules'), (detection, '/api/analytics/summary'),
                (frauder, '/api/frauder/context')]
     for headers, path in allowed:

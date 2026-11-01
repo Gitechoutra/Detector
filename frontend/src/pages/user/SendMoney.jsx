@@ -188,9 +188,9 @@ export default function SendMoney() {
             <ol className="small muted" style={{ paddingLeft: 18, margin: '8px 0 0', display: 'grid', gap: 6 }}>
               <li>Saved and checked against 9 SQL fraud rules in one database transaction.</li>
               <li>Risk score = sum of the weights of the rules that fire (max 100).</li>
-              <li>No rule triggered → sent instantly.</li>
-              <li>Any rule triggered (whatever the score) → held, and you are asked <strong>“Did you initiate this transaction?”</strong> YES sends it, NO blocks it.</li>
-              <li>Money leaves your account only after a YES (or when no rule fires).</li>
+              <li>Low risk score (below 40) → sent instantly.</li>
+              <li>High risk score (70 or more) → blocked instantly; no money leaves your account.</li>
+              <li>In between → held, and you are asked <strong>“Did you initiate this transaction?”</strong> YES sends it, NO blocks it.</li>
             </ol>
           </div>
         </div>

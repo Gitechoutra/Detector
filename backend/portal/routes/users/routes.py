@@ -1,5 +1,5 @@
 from flask import g, request
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from portal.extensions import db
 from portal.models import Device, LoginAttempt, Notification, SecurityEvent, Transaction
@@ -9,6 +9,13 @@ from portal.helpers.security import USER, role_required
 from portal.helpers.validators import json_body, page_args, paginate
 from . import bp
 
+
+
+def _visible_to(account_id):
+    """Everything the customer sent, plus incoming payments once credited: money
+    still being checked, or blocked, is never shown to the receiving side."""
+    return or_(Transaction.sender_account_id == account_id,
+               and_(Transaction.receiver_account_id == account_id, Transaction.status == 'COMPLETED'))
 
 
 def _with_direction(txn, account_id):
@@ -29,8 +36,10 @@ def dashboard():
         Transaction.sender_account_id == account.id).group_by(Transaction.status).all())
     total_sent = db.session.query(func.coalesce(func.sum(Transaction.amount), 0)).filter(
         Transaction.sender_account_id == account.id, Transaction.status == 'COMPLETED').scalar()
-    recent = (Transaction.query.filter(or_(Transaction.sender_account_id == account.id,
-                                           Transaction.receiver_account_id == account.id))
+    received_count, total_received = db.session.query(
+        func.count(Transaction.id), func.coalesce(func.sum(Transaction.amount), 0)).filter(
+        Transaction.receiver_account_id == account.id, Transaction.status == 'COMPLETED').one()
+    recent = (Transaction.query.filter(_visible_to(account.id))
               .order_by(Transaction.txn_time.desc()).limit(6).all())
     pending = sent.filter(Transaction.status == 'UNDER_REVIEW').order_by(Transaction.txn_time.desc()).all()
     security = (SecurityEvent.query.filter(SecurityEvent.user_id == user.id,
@@ -43,7 +52,8 @@ def dashboard():
         'stats': {'completed': stats.get('COMPLETED', 0), 'under_review': stats.get('UNDER_REVIEW', 0),
                   'blocked': stats.get('BLOCKED', 0), 'expired': stats.get('EXPIRED', 0),
                   'declined': stats.get('DECLINED', 0) + stats.get('CANCELLED', 0),
-                  'total_sent': float(total_sent)},
+                  'total_sent': float(total_sent),
+                  'received': received_count, 'total_received': float(total_received)},
         'recent': [_with_direction(t, account.id) for t in recent],
         'pending_reviews': [t.to_dict('user') for t in pending],
         'pending_confirmations': [confirmation_card(t) for t in pending_for(user)],
@@ -57,8 +67,7 @@ def dashboard():
 def transactions():
     expire_confirmations()
     account = g.current_user.primary_account
-    query = Transaction.query.filter(or_(Transaction.sender_account_id == account.id,
-                                         Transaction.receiver_account_id == account.id))
+    query = Transaction.query.filter(_visible_to(account.id))
     if request.args.get('status'):
         query = query.filter(Transaction.status == request.args['status'])
     if request.args.get('direction') == 'OUT':
@@ -75,7 +84,8 @@ def transactions():
 def transaction_detail(txn_id):
     account = g.current_user.primary_account
     txn = db.session.get(Transaction, txn_id)
-    if txn is None or account.id not in (txn.sender_account_id, txn.receiver_account_id):
+    if txn is None or not (txn.sender_account_id == account.id
+                           or (txn.receiver_account_id == account.id and txn.status == 'COMPLETED')):
         raise ApiError('Payment not found.', 404, 'NOT_FOUND')
     return ok(_with_direction(txn, account.id))
 

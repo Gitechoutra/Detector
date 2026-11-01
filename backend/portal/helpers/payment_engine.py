@@ -3,10 +3,14 @@
 Persist, evaluate, score, decide and the balance movement all happen inside one
 DB transaction that is committed once.
 
-No rule triggered  → the normal flow: the payment completes at once
-                     (except Frauder attempts: never made by the owner, always held).
-Any rule triggered → the payment is held (USER_CONFIRMATION_PENDING) and its owner
-is asked "Did you initiate this transaction?". Nothing is debited until then.
+DECISION_MODE=AUTO (default): the risk band decides at once, in the same request.
+  APPROVED band (score below the review floor) → completed automatically; any
+                low-weight rules that fired are kept as evidence.
+  BLOCKED band  → blocked automatically, high alert, no money moves.
+  REVIEW band   → held (USER_CONFIRMATION_PENDING) and the owner is asked
+                  "Did you initiate this transaction?". Nothing is debited until then.
+DECISION_MODE=OWNER_CONFIRM: any rule triggered (whatever the score) is held for
+the owner, and Frauder attempts are always held.
   YES → the payment is re-validated (accounts, balance, absolute restrictions)
         and, if it can be processed, completed (SUCCESSFUL).
   NO  → BLOCKED at once; no money moves.
@@ -202,6 +206,22 @@ def _auto_watchlist(txn, result):
                                           reason=f'Auto-added after account-takeover block of {txn.txn_ref}'))
 
 
+def auto_decisions():
+    return setting('DECISION_MODE', str).strip().upper() != 'OWNER_CONFIRM'
+
+
+def _block_and_alert(txn, result, explanation=None):
+    _block(txn, result, explanation)
+    rules = ', '.join(f"{h['code']} {h['name']}" for h in result['hits']) or 'none'
+    raise_alert('TRANSACTION_BLOCKED', 'HIGH',
+                f'Blocked: {inr(txn.amount)} {txn.sender_account.user.full_name} → '
+                f'{txn.receiver_account.user.full_name}',
+                f'Risk score {result["score"]}. Rules fired: {rules}. {txn.risk_explanation}',
+                user_id=txn.sender_account.user_id, transaction_id=txn.id, risk_score=result['score'],
+                simulated=txn.is_simulated)
+    _auto_watchlist(txn, result)
+
+
 def _apply_decision(txn, result, owner_must_confirm=False):
     sender_user = txn.sender_account.user
     receiver_user = txn.receiver_account.user
@@ -213,17 +233,27 @@ def _apply_decision(txn, result, owner_must_confirm=False):
     hard = sorted(hard_block_rules() & set(codes))
     if hard:
         # An absolute restriction (configured, none by default): blocked, no question asked.
-        _block(txn, result, (f'Transaction blocked because {_phrases(hard)}. {", ".join(hard)} is configured as an '
-                             f'absolute security restriction. Risk score {result["score"]}.')[:500])
-        raise_alert('TRANSACTION_BLOCKED', 'HIGH',
-                    f'Blocked: {inr(txn.amount)} {sender_user.full_name} → {receiver_user.full_name}',
-                    f'Risk score {result["score"]}. Rules fired: {rules}. {txn.risk_explanation}',
-                    user_id=sender_user.id, transaction_id=txn.id, risk_score=result['score'],
-                    simulated=txn.is_simulated)
-        _auto_watchlist(txn, result)
+        _block_and_alert(txn, result, (f'Transaction blocked because {_phrases(hard)}. {", ".join(hard)} is '
+                                       f'configured as an absolute security restriction. '
+                                       f'Risk score {result["score"]}.')[:500])
         return
 
-    # Any triggered rule, whatever the score: hold it and ask the owner.
+    if auto_decisions():
+        # The score decides immediately; only the REVIEW band waits for the owner.
+        if result['decision'] == 'APPROVED':
+            reason = (f'Approved automatically: risk score {result["score"]} is below the review threshold of '
+                      f'{fraud_engine.band_floor("REVIEW")}.'
+                      + (f' Rules fired (kept as evidence): {rules}.' if codes else ''))[:500]
+            txn.risk_explanation = reason if codes else None
+            _settle(txn, reason=reason)
+            return
+        if result['decision'] == 'BLOCKED':
+            _block_and_alert(txn, result,
+                             (f'Blocked automatically because {_phrases(codes)}. Risk score {result["score"]} '
+                              f'reached the blocking threshold of {fraud_engine.band_floor("BLOCKED")}.')[:500])
+            return
+
+    # REVIEW band (or OWNER_CONFIRM mode): hold it and ask the owner.
     txn.status = 'UNDER_REVIEW'
     txn.risk_explanation = explain(result, held=True) or (
         "Held for the account owner's authorization: no fraud rule was triggered (risk score 0), but the payment "

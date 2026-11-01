@@ -7,15 +7,15 @@ from portal.helpers.responses import ApiError
 from portal.seeders.seed_risk_categories import DEFAULT_BANDS
 
 DEMO_CREDENTIALS = [
-    {'role': 'USER', 'label': 'User (sender)', 'name': 'Rahul Sharma', 'email': 'rahul@demo.bank',
-     'password': 'Rahul@123', 'what': 'Sends money manually by UPI, QR code or bank transfer.'},
-    {'role': 'USER', 'label': 'User (sender)', 'name': 'Karan Mehta', 'email': 'karan@demo.bank',
-     'password': 'Karan@123', 'what': 'Second sender, useful to show per-customer history.'},
-    {'role': 'RECEIVER', 'label': 'Receiver', 'name': 'Priya Patel', 'email': 'priya@demo.bank',
-     'password': 'Priya@123', 'what': 'Receives money; credited only when a payment is approved.'},
-    {'role': 'RECEIVER', 'label': 'Receiver', 'name': 'Amit Verma', 'email': 'amit@demo.bank',
-     'password': 'Amit@123', 'what': 'Second clean receiver.'},
-    {'role': 'RECEIVER', 'label': 'Receiver (watch-listed)', 'name': 'QuickCash Services',
+    {'role': 'USER', 'label': 'User', 'name': 'Rahul Sharma', 'email': 'rahul@demo.bank',
+     'password': 'Rahul@123', 'what': 'Sends and receives money by UPI, QR code or bank transfer.'},
+    {'role': 'USER', 'label': 'User', 'name': 'Karan Mehta', 'email': 'karan@demo.bank',
+     'password': 'Karan@123', 'what': 'Second customer, useful to show per-customer history.'},
+    {'role': 'USER', 'label': 'User', 'name': 'Priya Patel', 'email': 'priya@demo.bank',
+     'password': 'Priya@123', 'what': 'Good customer to pay: incoming money is credited only once approved.'},
+    {'role': 'USER', 'label': 'User', 'name': 'Amit Verma', 'email': 'amit@demo.bank',
+     'password': 'Amit@123', 'what': 'Another clean customer to pay.'},
+    {'role': 'USER', 'label': 'User (watch-listed)', 'name': 'QuickCash Services',
      'email': 'quickcash@demo.bank', 'password': 'Quick@123',
      'what': 'On the watchlist: paying it fires R6 (send to quickcash@fsbank).'},
     {'role': 'USER', 'label': 'User (dormant demo)', 'name': 'Suresh Nair', 'email': 'suresh@demo.bank',
@@ -30,7 +30,7 @@ DEMO_CREDENTIALS = [
 GUIDE = [
     {'title': 'Genuine payment', 'detail': 'Log in as Rahul (User) and send ₹500 to priya@fsbank. It is APPROVED '
                                            'and Rahul’s balance drops by ₹500.'},
-    {'title': 'Receiver credited', 'detail': 'Log in as Priya (Receiver) in another tab: the ₹500 is credited.'},
+    {'title': 'Receiver credited', 'detail': 'Log in as Priya in another tab: the ₹500 shows under Money received.'},
     {'title': 'Become the attacker', 'detail': 'Log in as the Frauder. Pick the victim (Rahul), try logins, choose '
                                                'an unknown device or another city – every step is yours.'},
     {'title': 'Attempt a transfer', 'detail': 'Enter an amount and receiver and press Send. The SQL rules run '
@@ -51,6 +51,21 @@ def info():
 
 def frauder_user():
     return User.query.filter_by(email='frauder@demo.bank').first()
+
+
+def unlock_demo_user(email):
+    """Lifts the failed-login lock on one demo account (real customers keep the
+    normal lockout). Returns True if the account was locked."""
+    user = User.query.filter_by(email=(email or '').strip().lower(), is_demo=True).first()
+    if user is None:
+        raise ApiError('Only demo accounts can be unlocked here.', 404, 'NOT_FOUND')
+    was_locked = user.status == 'LOCKED'
+    if was_locked:
+        user.status, user.locked_until = 'ACTIVE', None
+    user.failed_login_count = 0
+    write_audit('DEMO_ACCOUNT_UNLOCKED', 'user', user.id, {'was_locked': was_locked}, actor=user)
+    db.session.commit()
+    return was_locked
 
 
 def reset(actor=None, restore_rules=True):

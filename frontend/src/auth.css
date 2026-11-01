@@ -1,0 +1,86 @@
+/* ── Login / register ─────────────────────────────────────── */
+.au {
+  --navy: #050816; --indigo: #6366F1; --blue: #3B82F6;
+  position: relative; min-height: 100vh; display: flex; flex-direction: column; color: #E2E8F0; background: var(--navy); overflow-x: clip;
+}
+.au-bg {
+  position: fixed; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(560px 360px at 15% 10%, rgba(99, 102, 241, .32), transparent 70%),
+    radial-gradient(520px 340px at 90% 85%, rgba(139, 92, 246, .25), transparent 70%),
+    radial-gradient(420px 300px at 85% 10%, rgba(34, 211, 238, .12), transparent 70%);
+}
+.au-bg::after {
+  content: ''; position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 60% 60% at 50% 45%, #000, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 45%, #000, transparent 75%);
+}
+.au-top { position: relative; display: flex; justify-content: space-between; align-items: center; padding: 20px 28px; }
+.au-brand { display: inline-flex; align-items: center; gap: 10px; color: #fff; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-weight: 800; font-size: 17px; }
+.au-brand:hover, .au-back:hover { text-decoration: none; color: #fff; }
+.au-brand em { font-style: normal; font-weight: 500; color: #94A3B8; }
+.au-mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--blue), #8B5CF6); }
+.au-back { color: #A9B3C9; font-size: 14px; font-weight: 500; }
+.au-main { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px 16px 32px; }
+.au-col { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px; animation: au-in .6s cubic-bezier(.2,.8,.2,1) both; }
+.au-col.wide { max-width: 520px; }
+@keyframes au-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.au-foot { position: relative; text-align: center; font-size: 12.5px; color: #6B7591; padding: 0 16px 24px; }
+
+.au-card {
+  padding: 30px; border-radius: 22px; color: var(--text); background: #fff;
+  box-shadow: 0 40px 80px -30px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06);
+}
+.au-card h1 { font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-size: 26px; font-weight: 800; letter-spacing: -.6px; color: #0F172A; }
+.au-card .input { border-radius: 11px; padding: 11px 13px; background: #F8FAFC; transition: border-color .2s, box-shadow .2s, background .2s; }
+.au-card .input:focus { background: #fff; border-color: var(--indigo); box-shadow: 0 0 0 4px rgba(99, 102, 241, .15); }
+.au .btn-glow {
+  border: 0; color: #fff; font-weight: 600; border-radius: 12px;
+  background: linear-gradient(135deg, #3B82F6, #6366F1); box-shadow: 0 10px 24px -10px rgba(79, 70, 229, .8);
+  transition: transform .15s, box-shadow .2s;
+}
+.au .btn-glow:hover:not(:disabled) { transform: translateY(-1px); background: linear-gradient(135deg, #3B82F6, #6366F1); box-shadow: 0 14px 30px -10px rgba(79, 70, 229, .9); }
+
+/* Role picker on the login page */
+.au-roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 4px; border-radius: 14px; background: #F1F4FA; }
+.au-roles button {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 4px; border: 0; border-radius: 10px;
+  font: inherit; font-size: 12px; font-weight: 600; color: #5B6478; background: transparent; cursor: pointer; transition: background .2s, color .2s, box-shadow .2s;
+}
+.au-roles button:hover { color: #0F172A; }
+.au-roles button.on { color: var(--tone); background: #fff; box-shadow: 0 2px 8px rgba(15, 23, 42, .08); }
+.au-roles .r-USER { --tone: #2563EB; }
+.au-roles .r-RECEIVER { --tone: #059669; }
+.au-roles .r-DETECTION { --tone: #7C3AED; }
+.au-roles .r-FRAUDER { --tone: #E11D48; }
+.au-demo-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px; border-radius: 12px; cursor: pointer;
+  font: inherit; font-weight: 600; font-size: 14px; color: #4338CA; background: #EEF2FF; border: 1px dashed #A5B4FC; transition: background .2s;
+}
+.au-demo-btn:hover:not(:disabled) { background: #E0E7FF; }
+.au-demo-btn:disabled { opacity: .6; cursor: wait; }
+.au-or { display: flex; align-items: center; gap: 12px; color: #94A3B8; font-size: 12px; }
+.au-or::before, .au-or::after { content: ''; flex: 1; height: 1px; background: #E5E8F0; }
+
+.au-panel {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 16px;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.au-panel strong { color: #fff; }
+.au-panel .small { color: #A9B3C9; }
+.au-panel .btn { background: #fff; color: #4338CA; font-weight: 600; flex-shrink: 0; }
+.au-panel .btn:hover { background: #EEF2FF; text-decoration: none; }
+.au-link { text-align: center; font-size: 14px; color: #A9B3C9; }
+.au-link a { color: #A5B4FC; font-weight: 600; }
+
+
+@media (max-width: 520px) {
+  .au-top { padding: 16px; }
+  .au-card { padding: 22px 18px; }
+  .au-panel { flex-direction: column; align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .au *, .au *::before, .au *::after { animation: none !important; transition: none !important; }
+}

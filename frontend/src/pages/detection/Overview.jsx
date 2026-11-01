@@ -43,6 +43,8 @@ export default function Overview() {
             <StatCard icon="✔" tone="green" label="Confirmed fraud" value={num(data.totals.confirmed_fraud)} sub="Resolved by analysts" />
           </div>
 
+          <DecisionBreakdown totals={data.totals} />
+
           <ConfirmationsCard data={confirmations.data} onOpen={(id) => navigate(`/detection/transactions/${id}`)} />
 
           <div className="grid grid-main mt-16">
@@ -175,6 +177,52 @@ export default function Overview() {
   );
 }
 
+// How every payment ended up where it is: decided by the risk score alone
+// (in the same request) or after the owner's answer / an analyst.
+const OUTCOMES = [
+  ['auto_approved', 'Approved automatically', 'Score below the review threshold', 'green'],
+  ['auto_blocked', 'Blocked automatically', 'Score reached the blocking threshold', 'red'],
+  ['pending_owner', 'Pending owner YES/NO', 'Review band – nothing debited yet', 'amber'],
+  ['awaiting_analyst', 'Under analyst review', 'Handed to the fraud team', 'purple'],
+  ['owner_approved', 'Approved after review', 'Owner answered YES', 'green'],
+  ['owner_blocked', 'Blocked after review', 'Owner answered NO', 'red'],
+  ['expired', 'Expired', 'No answer in time – never sent', 'slate'],
+];
+
+function DecisionBreakdown({ totals }) {
+  const total = totals.total || 0;
+  const automatic = totals.auto_approved + totals.auto_blocked;
+  return (
+    <div className="card mt-16">
+      <div className="card-head">
+        <h2>⚡ How payments were decided</h2>
+        <span className="small muted">
+          {total ? `${Math.round((automatic / total) * 100)}% decided automatically by the risk score` : 'No transactions yet'}
+        </span>
+      </div>
+      {total > 0 && (
+        <div className="decision-bar" aria-hidden="true">
+          {OUTCOMES.map(([key, , , tone]) => totals[key] > 0 && (
+            <span key={key} className={`tone-${tone}`} style={{ flexGrow: totals[key] }} title={`${key}: ${totals[key]}`} />
+          ))}
+        </div>
+      )}
+      <div className="decision-grid">
+        {OUTCOMES.map(([key, label, hint, tone]) => (
+          <div key={key} className="decision-cell">
+            <span className={`decision-dot tone-${tone}`} />
+            <div>
+              <strong>{num(totals[key])}</strong>
+              <div className="small">{label}</div>
+              <div className="small muted">{hint}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const ANSWER = { YES: ['YES – authorized', 'b-green'], NO: ['NO – denied', 'b-red'] };
 
 function ConfirmationsCard({ data, onOpen }) {
@@ -186,7 +234,7 @@ function ConfirmationsCard({ data, onOpen }) {
         <h2>🔐 Suspicious transactions – owner confirmations</h2>
         <span className="small muted">{data.counts.pending} waiting · {data.counts.yes} YES · {data.counts.no} NO · {data.counts.expired} expired</span>
       </div>
-      {rows.length === 0 ? <Empty icon="🙋" title="No confirmations yet">When any fraud rule fires, the payment is held and its owner is asked whether they initiated it.</Empty> : (
+      {rows.length === 0 ? <Empty icon="🙋" title="No confirmations yet">Payments that score in the review band are held and their owner is asked whether they initiated them.</Empty> : (
         <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Ref</th><th>Owner → Receiver</th><th>Amount</th><th>Score</th><th>Rules</th><th>Owner’s answer</th><th>Final status</th></tr></thead>

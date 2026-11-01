@@ -14,6 +14,9 @@ SETTINGS = [
     ('CONFIRMATION_HARD_BLOCK_RULES', '',
      'Comma-separated rules treated as an absolute restriction: the payment is blocked and a YES cannot '
      'authorize it. Empty = none.'),
+    ('DECISION_MODE', 'AUTO',
+     'AUTO: the risk band decides instantly (approve / owner confirms / block). '
+     'OWNER_CONFIRM: any triggered rule is held for the owner.'),
 ]
 
 

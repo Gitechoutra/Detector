@@ -1,5 +1,7 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
+import { dashboardHref } from './roles';
 import Layout from './components/Layout';
 import DemoMode from './pages/DemoMode';
 import Landing from './pages/Landing';
@@ -17,16 +19,19 @@ import FrauderConsole from './pages/frauder/FrauderConsole';
 import FrauderHistory from './pages/frauder/FrauderHistory';
 import IncomingPayments from './pages/receiver/IncomingPayments';
 import MyQR from './pages/receiver/MyQR';
-import ReceiverDashboard from './pages/receiver/ReceiverDashboard';
 import SendMoney from './pages/user/SendMoney';
 import UserDashboard from './pages/user/UserDashboard';
 import UserSecurity from './pages/user/UserSecurity';
 import UserTransactions from './pages/user/UserTransactions';
 
+// Not signed in, or signed in as another role: go through login for this role
+// and come back to the exact page that was asked for.
 function RequireRole({ role }) {
   const { session } = useAuth();
-  if (!session) return <Navigate to="/login" replace />;
-  if (session.user.role !== role) return <Navigate to={session.dashboard} replace />;
+  const location = useLocation();
+  if (!session || session.user.role !== role) {
+    return <Navigate to={dashboardHref(session, role, location.pathname + location.search)} replace />;
+  }
   return <Layout />;
 }
 
@@ -35,45 +40,60 @@ function Home() {
   return <Navigate to={session ? session.dashboard : '/login'} replace />;
 }
 
+// Client-side navigation keeps the old scroll offset; start each page at the top.
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
+  return null;
+}
+
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/demo" element={<DemoMode />} />
+    <>
+      <ScrollToTop />
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/demo" element={<DemoMode />} />
 
-      <Route path="/user" element={<RequireRole role="USER" />}>
-        <Route index element={<UserDashboard />} />
-        <Route path="send" element={<SendMoney />} />
-        <Route path="transactions" element={<UserTransactions />} />
-        <Route path="notifications" element={<Notifications />} />
-        <Route path="security" element={<UserSecurity />} />
-      </Route>
+        <Route path="/user" element={<RequireRole role="USER" />}>
+          <Route index element={<UserDashboard />} />
+          <Route path="send" element={<SendMoney />} />
+          <Route path="received" element={<IncomingPayments />} />
+          <Route path="qr" element={<MyQR />} />
+          <Route path="transactions" element={<UserTransactions />} />
+          <Route path="notifications" element={<Notifications />} />
+          <Route path="security" element={<UserSecurity />} />
+        </Route>
 
-      <Route path="/receiver" element={<RequireRole role="RECEIVER" />}>
-        <Route index element={<ReceiverDashboard />} />
-        <Route path="payments" element={<IncomingPayments />} />
-        <Route path="qr" element={<MyQR />} />
-        <Route path="notifications" element={<Notifications />} />
-      </Route>
+        {/* The Receiver login is retired: old links land on the same pages inside the User dashboard. */}
 
-      <Route path="/detection" element={<RequireRole role="DETECTION" />}>
-        <Route index element={<DetectionOverview />} />
-        <Route path="monitor" element={<Monitor />} />
-        <Route path="transactions/:id" element={<Investigation />} />
-        <Route path="alerts" element={<Alerts />} />
-        <Route path="rules" element={<Rules />} />
-        <Route path="watchlist" element={<Watchlist />} />
-        <Route path="security" element={<SecurityAudit />} />
-      </Route>
+        <Route path="/receiver" element={<Navigate to="/user" replace />} />
 
-      <Route path="/frauder" element={<RequireRole role="FRAUDER" />}>
-        <Route index element={<FrauderConsole />} />
-        <Route path="history" element={<FrauderHistory />} />
-      </Route>
+        <Route path="/receiver/payments" element={<Navigate to="/user/received" replace />} />
 
-      <Route path="*" element={<Home />} />
-    </Routes>
+        <Route path="/receiver/qr" element={<Navigate to="/user/qr" replace />} />
+
+        <Route path="/receiver/*" element={<Navigate to="/user" replace />} />
+
+        <Route path="/detection" element={<RequireRole role="DETECTION" />}>
+          <Route index element={<DetectionOverview />} />
+          <Route path="monitor" element={<Monitor />} />
+          <Route path="transactions/:id" element={<Investigation />} />
+          <Route path="alerts" element={<Alerts />} />
+          <Route path="rules" element={<Rules />} />
+          <Route path="watchlist" element={<Watchlist />} />
+          <Route path="security" element={<SecurityAudit />} />
+        </Route>
+
+        <Route path="/frauder" element={<RequireRole role="FRAUDER" />}>
+          <Route index element={<FrauderConsole />} />
+          <Route path="history" element={<FrauderHistory />} />
+        </Route>
+
+        <Route path="*" element={<Home />} />
+      </Routes>
+    </>
   );
 }

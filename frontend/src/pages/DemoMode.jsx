@@ -5,7 +5,7 @@ import { useToast } from '../components/Toast';
 import { Loading, Modal } from '../components/ui';
 import { rotateDeviceId } from '../utils/device';
 
-const ROLE_TONE = { USER: 'b-blue', RECEIVER: 'b-green', DETECTION: 'b-purple', FRAUDER: 'b-red' };
+const ROLE_TONE = { USER: 'b-blue', DETECTION: 'b-purple', FRAUDER: 'b-red' };
 
 export default function DemoMode() {
   const toast = useToast();
@@ -69,7 +69,7 @@ export default function DemoMode() {
             <div className="demo-banner">
               <h1>Guided presentation</h1>
               <p className="muted mt-8">
-                You act out all three roles by hand: the genuine User, the Receiver and the Frauder. Nothing runs on
+                You act out the roles by hand: genuine Users (who send and receive) and the Frauder. Nothing runs on
                 its own – the SQL fraud engine automatically checks every login and payment you make. Open each role
                 in its own browser tab (every tab keeps its own login).
               </p>

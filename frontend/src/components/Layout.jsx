@@ -8,15 +8,9 @@ const NAV = {
   USER: {
     title: 'User', mark: 'U', home: '/user',
     items: [
-      ['/user', '🏠', 'Dashboard', true], ['/user/send', '💸', 'Send Money'], ['/user/transactions', '📄', 'Transactions'],
+      ['/user', '🏠', 'Dashboard', true], ['/user/send', '💸', 'Send Money'], ['/user/received', '📥', 'Money Received'],
+      ['/user/qr', '🔳', 'My QR & UPI'], ['/user/transactions', '📄', 'Transactions'],
       ['/user/notifications', '🔔', 'Notifications', false, 'notifications'], ['/user/security', '🛡️', 'Security'],
-    ],
-  },
-  RECEIVER: {
-    title: 'Receiver', mark: 'R', home: '/receiver',
-    items: [
-      ['/receiver', '🏠', 'Dashboard', true], ['/receiver/payments', '📥', 'Incoming Payments'],
-      ['/receiver/qr', '🔳', 'My QR & UPI'], ['/receiver/notifications', '🔔', 'Notifications', false, 'notifications'],
     ],
   },
   DETECTION: {
@@ -33,7 +27,7 @@ const NAV = {
   },
 };
 
-const TONE = { USER: 'blue', RECEIVER: 'green', DETECTION: 'purple', FRAUDER: 'red' };
+const TONE = { USER: 'blue', DETECTION: 'purple', FRAUDER: 'red' };
 
 export default function Layout() {
   const { user, logout } = useAuth();

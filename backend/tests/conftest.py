@@ -46,6 +46,15 @@ def fresh_data(app):
 
 
 @pytest.fixture
+def owner_confirm(app):
+    """The pre-AUTO policy: any triggered rule is held for the owner's YES/NO."""
+    with app.app_context():
+        db.session.get(SystemSetting, 'DECISION_MODE').setting_value = 'OWNER_CONFIRM'
+        db.session.commit()
+        db.session.remove()
+
+
+@pytest.fixture
 def client(app):
     return app.test_client()
 

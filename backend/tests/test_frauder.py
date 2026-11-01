@@ -11,6 +11,10 @@ from portal.models import Transaction, User
 
 from .conftest import balance, login, send
 
+# Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
+# the automatic policy is covered by test_auto_decisions.py.
+pytestmark = pytest.mark.usefixtures('owner_confirm')
+
 OPENING = {'rahul@demo.bank': Decimal('250000'), 'suresh@demo.bank': Decimal('300000'),
            'priya@demo.bank': Decimal('25000'), 'amit@demo.bank': Decimal('10000'),
            'quickcash@demo.bank': Decimal('5000')}

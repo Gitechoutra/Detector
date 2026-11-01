@@ -8,6 +8,10 @@ from portal.helpers import payment_engine
 
 from .conftest import balance, login, send
 
+# Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
+# the automatic policy is covered by test_auto_decisions.py.
+pytestmark = pytest.mark.usefixtures('owner_confirm')
+
 
 def _otp_from_sms(client, headers, txn_id):
     res = client.post(f'/api/transactions/{txn_id}/verification/start', headers=headers)

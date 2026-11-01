@@ -72,8 +72,8 @@ No password or secret is written in the source code; everything comes from `.env
 | Frauder | frauder@demo.bank | Fraud@123 | Manual attacker console |
 | User (dormant demo) | suresh@demo.bank | Suresh@123 | Designated dormant account for R8 |
 
-Each **browser tab** keeps its own login (sessionStorage), so you can have User, Receiver and Detection
-open side by side.
+Each **browser tab** keeps its own login (sessionStorage), so you can have two Users (one paying, one
+being paid) and Detection open side by side. Every customer sends and receives with one User login.
 
 **New customers** can sign up from **Create an account** on the login page (`/register`):
 - Choose User (send money) or Receiver (receive money).
