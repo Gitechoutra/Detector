@@ -39,7 +39,8 @@ def summary(start=None, end=None, source=None):
                SUM(t.status = 'COMPLETED' AND t.confirmation_status IS NULL)     AS auto_approved,
                SUM(t.status = 'COMPLETED' AND t.confirmation_status IS NOT NULL) AS owner_approved,
                SUM(t.status = 'BLOCKED' AND t.confirmation_status IS NULL)       AS auto_blocked,
-               SUM(t.status = 'BLOCKED' AND t.confirmation_status IS NOT NULL)   AS owner_blocked,
+               SUM((t.status = 'BLOCKED' OR (t.status = 'CANCELLED' AND t.confirmation_response = 'NO'))
+                   AND t.confirmation_status IS NOT NULL)   AS owner_blocked,
                SUM(t.status = 'UNDER_REVIEW' AND t.review_stage = 'AWAITING_CUSTOMER') AS pending_owner,
                SUM(t.status = 'UNDER_REVIEW' AND t.review_stage = 'AWAITING_ANALYST')  AS awaiting_analyst,
                SUM(t.status = 'EXPIRED')                                          AS expired,

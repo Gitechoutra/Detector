@@ -188,9 +188,9 @@ export default function SendMoney() {
             <ol className="small muted" style={{ paddingLeft: 18, margin: '8px 0 0', display: 'grid', gap: 6 }}>
               <li>Saved and checked against 9 SQL fraud rules in one database transaction.</li>
               <li>Risk score = sum of the weights of the rules that fire (max 100).</li>
-              <li>Low risk score (below 40) → sent instantly.</li>
-              <li>High risk score (70 or more) → blocked instantly; no money leaves your account.</li>
-              <li>In between → held, and you are asked <strong>“Did you initiate this transaction?”</strong> YES sends it, NO blocks it.</li>
+              <li>No risk factor → sent instantly.</li>
+              <li>Any risk factor, whatever the score (70+ is high risk) → held, and you are asked <strong>“Suspicious transaction detected. Did you initiate this transaction?”</strong></li>
+              <li>YES → an OTP is sent to your registered phone and e-mail; the money moves only after you verify it. NO → stopped, and the receiver account is blocked.</li>
             </ol>
           </div>
         </div>
@@ -202,7 +202,7 @@ export default function SendMoney() {
 function ResultPanel({ result, onAgain, onAnswered }) {
   const tone = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-warn', BLOCKED: 'notice-danger' }[result.status] || 'notice-info';
   const icon = { COMPLETED: '✅', UNDER_REVIEW: '⏸', BLOCKED: '⛔' }[result.status] || 'ℹ';
-  if (result.confirmation?.status === 'PENDING') {
+  if (result.status === 'UNDER_REVIEW' && ['PENDING', 'CONFIRMED'].includes(result.confirmation?.status)) {
     return (
       <div className="stack">
         <SecurityConfirmation items={[result]} onChange={onAnswered} />

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { errorMessage, post } from '../api/client';
 import { useToast } from '../components/Toast';
 import { useConfirmationAnswer } from '../components/SecurityConfirmation';
@@ -6,6 +7,7 @@ import { Empty, ErrorNote, Loading, PageHead, Pagination } from '../components/u
 import { useApi } from '../hooks';
 import { timeAgo } from '../utils/format';
 
+const SECURITY_TITLES = ['Suspicious transaction detected', 'Security Verification Required'];
 const ICON = { SUCCESS: ['✓', 'tone-green'], WARNING: ['⚠', 'tone-amber'], DANGER: ['⛔', 'tone-red'], OTP: ['📱', 'tone-purple'], INFO: ['i', 'tone-blue'] };
 
 export default function Notifications() {
@@ -13,11 +15,14 @@ export default function Notifications() {
   const [page, setPage] = useState(1);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const { data, error, loading, reload } = useApi('/notifications', { page, unread: unreadOnly ? 1 : undefined }, { interval: 5000 });
-  const { answer, busy } = useConfirmationAnswer(() => reload(true));
+  const navigate = useNavigate();
+  // After YES the OTP is entered on the dashboard's verification card.
+  const { answer, busy } = useConfirmationAnswer(() => reload(true), () => navigate('/user'));
 
   const markAll = async () => {
     try {
       await post('/notifications/read-all');
+      setPage(1);
       reload(true);
     } catch (e) {
       toast(errorMessage(e), 'error');
@@ -33,7 +38,7 @@ export default function Notifications() {
     <>
       <PageHead title="Notifications" subtitle="Payment updates, security alerts and simulated SMS messages.">
         <label className="row small"><input type="checkbox" checked={unreadOnly} onChange={(e) => { setUnreadOnly(e.target.checked); setPage(1); }} /> Unread only</label>
-        <button className="btn btn-ghost btn-sm" onClick={markAll} disabled={!data?.unread}>Mark all read</button>
+        <button className="btn btn-ghost btn-sm" onClick={markAll} disabled={!data?.items?.length}>Mark all read</button>
       </PageHead>
       <div className="card">
         <ErrorNote error={error} />
@@ -47,7 +52,7 @@ export default function Notifications() {
                   <div style={{ flex: 1 }}>
                     <div className="row-between"><strong>{n.title}</strong><span className="muted small nowrap">{timeAgo(n.created_at)}</span></div>
                     <div className={n.category === 'OTP' ? 'sms mt-8' : 'muted small'}>{n.message}</div>
-                    {n.title === 'Security Verification Required' && !n.is_read && n.transaction_id && (
+                    {SECURITY_TITLES.includes(n.title) && !n.is_read && n.transaction_id && (
                       <div className="row wrap mt-8" onClick={(e) => e.stopPropagation()}>
                         <button className="btn btn-success btn-sm" disabled={!!busy} onClick={() => answer({ id: n.transaction_id }, 'YES')}>✓ YES, I INITIATED THIS TRANSACTION</button>
                         <button className="btn btn-danger btn-sm" disabled={!!busy} onClick={() => answer({ id: n.transaction_id }, 'NO')}>✕ NO, I DID NOT INITIATE THIS TRANSACTION</button>

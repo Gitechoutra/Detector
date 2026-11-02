@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { del, errorMessage, patch, post } from '../../api/client';
 import { useToast } from '../../components/Toast';
-import { Empty, ErrorNote, Field, Loading, PageHead, Toggle } from '../../components/ui';
+import { Empty, ErrorNote, Field, Loading, Modal, PageHead, RiskScore, RuleChips, Toggle } from '../../components/ui';
 import { useApi } from '../../hooks';
-import { dateTime } from '../../utils/format';
+import { dateTime, money } from '../../utils/format';
 
 const TYPES = [['UPI', 'UPI ID'], ['ACCOUNT', 'Account number'], ['DEVICE', 'Device fingerprint'], ['IP', 'IP address']];
 
@@ -84,9 +84,83 @@ export default function Watchlist() {
             <Field label="Reason"><input className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} required placeholder="e.g. Reported mule account" /></Field>
             <button className="btn btn-primary" disabled={busy}>Add to watchlist</button>
           </form>
-          <p className="muted small mt-16">AUTO entries are added by the engine when it blocks an account-takeover (attacker’s untrusted device and public IP).</p>
+          <p className="muted small mt-16">AUTO entries are added by the engine: the attacker’s untrusted device and public IP after an account-takeover block, and the receiver’s UPI ID and account number when an account owner answers NO.</p>
         </div>
       </div>
+      <BlockedReceivers onChange={() => reload(true)} />
     </>
+  );
+}
+
+/** Receiver accounts blocked after an owner's NO. The block lives in the database
+ *  (account status BLOCKED); lifting it needs a reason and is audited. */
+function BlockedReceivers({ onChange }) {
+  const toast = useToast();
+  const { data, error, reload } = useApi('/detection/receiver-blocks');
+  const [lifting, setLifting] = useState(null);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const lift = async () => {
+    if (reason.trim().length < 5) {
+      toast('Give a reason of at least 5 characters.', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await post(`/detection/receiver-blocks/${lifting.id}/lift`, { reason: reason.trim() });
+      toast(res.message, 'success');
+      setLifting(null);
+      setReason('');
+      reload(true);
+      onChange?.();
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card mt-16">
+      <div className="card-head">
+        <h2>⛔ Blocked receiver accounts</h2>
+        <span className="small muted">Blocked when the payer’s account owner answered NO</span>
+      </div>
+      <ErrorNote error={error} />
+      {!data ? <Loading /> : data.length === 0 ? <Empty icon="✅" title="No blocked receivers" /> : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Blocked at</th><th>Receiver</th><th>Transaction</th><th>Score</th><th>Risk factors</th><th>Reason</th><th>Status</th><th /></tr></thead>
+            <tbody>
+              {data.map((b) => (
+                <tr key={b.id}>
+                  <td className="small nowrap">{dateTime(b.blocked_at)}</td>
+                  <td className="small"><strong>{b.receiver.name}</strong><div className="muted mono">{b.receiver.upi_id}</div></td>
+                  <td className="small"><span className="mono">{b.transaction?.txn_ref}</span><div className="muted">{money(b.transaction?.amount)} from {b.transaction?.sender}</div></td>
+                  <td><RiskScore score={b.risk_score} /></td>
+                  <td><RuleChips rules={b.risk_factors} /></td>
+                  <td className="small">{b.reason}</td>
+                  <td>{b.status === 'ACTIVE' ? <span className="badge b-red">Blocked</span>
+                    : <span className="badge b-slate" title={`${b.lifted_by}: ${b.lift_reason}`}>Lifted {dateTime(b.lifted_at)}</span>}</td>
+                  <td>{b.status === 'ACTIVE' && <button className="btn btn-ghost btn-sm" onClick={() => setLifting(b)}>Lift block</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {lifting && (
+        <Modal title={`Lift the block on ${lifting.receiver.name}?`} onClose={() => setLifting(null)} footer={<>
+          <button className="btn btn-ghost" onClick={() => setLifting(null)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || reason.trim().length < 5} onClick={lift}>Lift block</button>
+        </>}>
+          <p className="small">The account can receive money again once no other block on it is active, and its watchlist flags are deactivated. This is recorded in the audit trail.</p>
+          <Field label="Reason (required)">
+            <input className="input" value={reason} maxLength={255} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Merchant verified by phone" />
+          </Field>
+        </Modal>
+      )}
+    </div>
   );
 }

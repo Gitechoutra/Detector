@@ -8,7 +8,9 @@ const RULE_STATUS = {
   DISABLED: ['Disabled', 'b-slate'],
 };
 const TIMELINE_ICON = { activity: '🕵️', submit: '📤', engine: '⚙️', decision: '⚖️', confirm: '🙋', alert: '🚨', money: '💰' };
-const ANSWER = { YES: ['YES – user authorized', 'b-green'], NO: ['NO – user denied', 'b-red'] };
+const ANSWER = { YES: ['YES – user initiated it', 'b-green'], NO: ['NO – user denied it', 'b-red'] };
+const OTP = { NOT_SENT: ['Not sent', 'b-slate'], SENT: ['Sent – awaiting entry', 'b-amber'], VERIFIED: ['Verified', 'b-green'],
+  FAILED: ['Failed – too many wrong codes', 'b-red'], EXPIRED: ['Expired', 'b-slate'] };
 
 /** What the owner was asked and how they answered. */
 export function ConfirmationPanel({ txn }) {
@@ -25,36 +27,18 @@ export function ConfirmationPanel({ txn }) {
               : <span className="badge b-amber badge-dot">Waiting for {owner}…</span>}
       </div>
       <p className="small muted mt-8">
-        Security Verification Required: “Did you initiate this {money(txn.amount)} transaction to {txn.receiver_name || txn.receiver?.name}?”
+        “Suspicious transaction detected. Did you initiate this {money(txn.amount)} transaction to {txn.receiver_name || txn.receiver?.name}?”
         {c.responded_at ? ` · answered at ${timeOnly(c.responded_at)}` : c.expires_at ? ` · expires at ${timeOnly(c.expires_at)}` : ''}
       </p>
+      {c.otp && c.otp.status !== 'NOT_SENT' && (
+        <div className="row small mt-8">OTP verification: <span className={`badge ${OTP[c.otp.status][1]}`}>{OTP[c.otp.status][0]}</span>
+          {c.otp.attempts > 0 && <span className="muted">{c.otp.attempts} wrong attempt(s)</span>}</div>
+      )}
     </div>
   );
 }
 
-/** The attacker values typed in the Frauder console – SIMULATED, never verified. */
-export function SimulatedDetails({ details }) {
-  if (!details) return null;
-  const device = details.use_registered_device ? 'Victim’s registered device (remote-access scam)'
-    : `${details.device_type} · ID ${details.device_id}`;
-  return (
-    <div className="sim-panel">
-      <div className="row-between wrap">
-        <h3>Attacker details entered by hand</h3>
-        <span className="badge b-purple">SIMULATED – not verified</span>
-      </div>
-      <dl className="kv mt-8">
-        <dt>City</dt><dd>{details.city}</dd>
-        {details.target_location && <><dt>Location</dt><dd>{details.target_location}</dd></>}
-        <dt>Device</dt><dd>{device}</dd>
-        <dt>IP address</dt><dd className="mono">{details.ip_address}</dd>
-        {details.scenario_name && <><dt>Scenario</dt><dd>{details.scenario_name}</dd></>}
-        {details.demo_time && <><dt>Demo clock</dt><dd>{details.demo_time}</dd></>}
-      </dl>
-    </div>
-  );
-}
-const DECISION_NOTICE = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-warn', BLOCKED: 'notice-danger', EXPIRED: 'notice-info' };
+const DECISION_NOTICE = { COMPLETED: 'notice-success', UNDER_REVIEW: 'notice-info', BLOCKED: 'notice-danger', CANCELLED: 'notice-info', EXPIRED: 'notice-info' };
 
 /** The full, backend-generated explanation of one fraud decision. */
 export default function DetectionResult({ result }) {
@@ -65,10 +49,9 @@ export default function DetectionResult({ result }) {
       <div className={`notice ${DECISION_NOTICE[result.status] || 'notice-info'}`} style={{ display: 'block', padding: 16 }}>
         <div className="row-between wrap">
           <strong style={{ fontSize: 16 }}>
-            {result.status === 'COMPLETED' ? '✅ Successful – money transferred'
-              : result.status === 'UNDER_REVIEW' ? (result.review_stage === 'AWAITING_CUSTOMER'
-                ? `🔐 USER CONFIRMATION PENDING – waiting for ${result.sender_name.split(' ')[0]}’s YES/NO, no money moved`
-                : '⏸ With the fraud team – no money moved')
+            {result.status === 'COMPLETED' ? '✅ Success – money transferred'
+              : result.status === 'UNDER_REVIEW' ? '⏳ Processing – no money moved yet'
+                : result.status === 'CANCELLED' ? '✕ Cancelled – no money moved'
                 : result.status === 'BLOCKED' ? '⛔ Blocked – no money moved'
                   : result.status === 'EXPIRED' ? '⌛ Expired – never authorized, no money moved' : result.status}
           </strong>
@@ -85,12 +68,14 @@ export default function DetectionResult({ result }) {
         <dt>Device</dt><dd>{result.device ? `${result.device.device_name} (${result.device.is_trusted ? 'trusted' : 'unknown'})` : '—'}</dd>
         <dt>Location · time</dt><dd>{result.city} · {timeOnly(result.txn_time)}</dd>
         <dt>IP address</dt><dd className="mono">{result.ip_address || '—'}</dd>
+        {result.receiver_account_status && result.receiver_account_status !== 'ACTIVE' && <>
+          <dt>Receiver account</dt><dd><span className="badge b-red">{result.receiver_account_status === 'BLOCKED' ? '⛔ Blocked from receiving' : result.receiver_account_status}</span></dd>
+        </>}
         <dt>Risk score</dt>
         <dd><div className="row"><RiskScore score={result.risk_score} /><span className="mono small muted">min(100, {formula}) = {result.risk_score}</span></div></dd>
       </dl>
 
       <ConfirmationPanel txn={result} />
-      <SimulatedDetails details={result.simulated_details} />
 
       <div>
         <h3>All nine SQL rules{result.rules_evaluated != null && <span className="muted small"> · evaluated in {result.evaluation_ms} ms</span>}</h3>

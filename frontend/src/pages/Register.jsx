@@ -36,7 +36,7 @@ export default function Register() {
     }
     setBusy(true);
     try {
-      const { confirm, ...body } = form;
+      const { confirm: _confirm, ...body } = form;   // the confirmation is checked here, not sent
       const next = await register({ ...body, phone: body.phone || null });
       toast(`Your UPI ID is ${next.account.upi_id}`, 'success', 'Account created');
       navigate(next.dashboard, { replace: true });

@@ -34,7 +34,7 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const url = error.config?.url || '';
-    if (status === 401 && !url.startsWith('/auth/login') && !url.startsWith('/demo')) {
+    if (status === 401 && !url.startsWith('/auth/login')) {
       setSession(null);
       if (!window.location.pathname.startsWith('/login')) window.location.assign('/login?expired=1');
     }

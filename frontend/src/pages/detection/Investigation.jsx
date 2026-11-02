@@ -1,11 +1,33 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { errorMessage, post } from '../../api/client';
-import { ConfirmationPanel, SimulatedDetails } from '../../components/DetectionResult';
+import { ConfirmationPanel } from '../../components/DetectionResult';
 import { useToast } from '../../components/Toast';
-import { Empty, ErrorNote, Field, Loading, Modal, OutcomeBadge, RiskScore, RuleChips, StatusBadge } from '../../components/ui';
+import { Empty, ErrorNote, Field, Loading, Modal, OutcomeBadge, RiskScore, StatusBadge } from '../../components/ui';
 import { useApi } from '../../hooks';
 import { dateTime, money, METHOD_LABEL } from '../../utils/format';
+
+/** The context the Frauder entered for an attempt (city, device, IP). Analysts only. */
+function AttemptContext({ details }) {
+  if (!details) return null;
+  const device = details.use_registered_device ? 'Victim’s registered device (remote-access scam)'
+    : `${details.device_type} · ID ${details.device_id}`;
+  return (
+    <div className="sim-panel">
+      <div className="row-between wrap">
+        <h3>Frauder attempt context</h3>
+        <span className="badge b-purple">Entered in the Frauder console – not verified</span>
+      </div>
+      <dl className="kv mt-8">
+        <dt>City</dt><dd>{details.city}</dd>
+        {details.target_location && <><dt>Location</dt><dd>{details.target_location}</dd></>}
+        <dt>Device</dt><dd>{device}</dd>
+        <dt>IP address</dt><dd className="mono">{details.ip_address}</dd>
+        {details.demo_time && <><dt>Demo clock</dt><dd>{details.demo_time}</dd></>}
+      </dl>
+    </div>
+  );
+}
 
 const TYPE_LABEL = { INITIAL: 'Real-time decision', RE_EVALUATION: 'Re-evaluation after customer verification', ANALYST: 'Re-evaluation before analyst decision' };
 
@@ -88,7 +110,7 @@ export default function Investigation() {
       {(t.confirmation || t.simulated_details) && (
         <div className="grid grid-2 mt-16">
           <ConfirmationPanel txn={t} />
-          <SimulatedDetails details={t.simulated_details} />
+          <AttemptContext details={t.simulated_details} />
         </div>
       )}
       {t.is_simulated && <div className="small muted mt-8">Money {t.money_moved ? 'was transferred' : 'was not moved'} – this payment used the real demo account balances.</div>}

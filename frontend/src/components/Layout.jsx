@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useApi } from '../hooks';
 import { Avatar } from './ui';
@@ -17,13 +17,15 @@ const NAV = {
     title: 'Detection System', mark: 'D', home: '/detection',
     items: [
       ['/detection', '📊', 'Overview', true], ['/detection/monitor', '📡', 'Live Monitor'],
+      ['/detection/engine', '🧪', 'Detection Engine'],
       ['/detection/alerts', '🚨', 'Alerts & Cases', false, 'alerts'], ['/detection/rules', '⚙️', 'Fraud Rules'],
       ['/detection/watchlist', '🚫', 'Watchlist'], ['/detection/security', '🔐', 'Security & Audit'],
     ],
   },
   FRAUDER: {
     title: 'Frauder', mark: 'F', home: '/frauder',
-    items: [['/frauder', '🕵️', 'Frauder Console', true], ['/frauder/history', '🗂️', 'Attempt History']],
+    items: [['/frauder', '🕵️', 'Frauder Console', true], ['/frauder/records', '📋', 'Fraud Records'],
+      ['/frauder/history', '🗂️', 'Attempt History']],
   },
 };
 
@@ -63,9 +65,6 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar-foot">
-          <Link to="/demo" className="small">🎓 Demo Mode guide</Link>
-        </div>
       </aside>
       <div className="main">
         <header className="topbar">

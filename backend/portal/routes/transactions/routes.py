@@ -1,12 +1,14 @@
+import re
+
 from flask import g, request
 from flask_jwt_extended import get_jwt
 
 from portal.helpers import payment_engine
 from portal.helpers.auth import resolve_location_id
-from portal.helpers.responses import ok
+from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import USER, client_ip, role_required
 from portal.helpers.validators import json_body, parse_amount, require_str
-from portal.models import Transaction
+from portal.models import Notification, Transaction
 from . import bp
 
 
@@ -14,7 +16,7 @@ def pending_for(user):
     return (Transaction.query.filter(Transaction.sender_account_id == user.primary_account.id,
                                      Transaction.status == 'UNDER_REVIEW',
                                      Transaction.review_stage == 'AWAITING_CUSTOMER',
-                                     Transaction.confirmation_status == 'PENDING')
+                                     Transaction.confirmation_status.in_(('PENDING', 'CONFIRMED')))
             .order_by(Transaction.txn_time.desc()).all())
 
 
@@ -27,13 +29,25 @@ def confirmation_card(txn):
                        or (txn.device.device_name if txn.device else None),
         'ip_address': txn.ip_address,
         'target_location': sim.get('target_location'),
+        'demo_otp': demo_otp(txn),
     })
     return data
 
 
+def demo_otp(txn):
+    """The latest OTP for a payment awaiting it, read from the simulated SMS in the
+    owner's notifications (no real SMS gateway), so the demo can show it on screen."""
+    if txn.confirmation_status != 'CONFIRMED' or txn.status != 'UNDER_REVIEW':
+        return None
+    sms = (Notification.query.filter_by(transaction_id=txn.id, category='OTP')
+           .order_by(Notification.id.desc()).first())
+    found = re.search(r'OTP (\d{6})', sms.message) if sms else None
+    return found.group(1) if found else None
+
+
 MESSAGES = {
     'COMPLETED': 'Payment successful.',
-    'UNDER_REVIEW': 'Security Verification Required: confirm whether you initiated this transaction.',
+    'UNDER_REVIEW': 'Suspicious transaction detected. Did you initiate this transaction?',
     'BLOCKED': 'Payment blocked by fraud detection. No money was debited.',
 }
 
@@ -58,7 +72,8 @@ def send():
 @bp.post('/<int:txn_id>/verification/start')
 @role_required(USER)
 def start_verification(txn_id):
-    return ok(payment_engine.start_verification(g.current_user, txn_id), 'OTP sent (simulated SMS).')
+    otp = payment_engine.start_verification(g.current_user, txn_id)
+    return ok(otp, f'A new OTP has been sent to {", ".join(otp["sent_to"])}.')
 
 
 @bp.post('/<int:txn_id>/verification/confirm')
@@ -66,15 +81,10 @@ def start_verification(txn_id):
 def confirm_verification(txn_id):
     data = json_body()
     otp = require_str(data, 'otp', 6, 'OTP')
-    password = require_str(data, 'password', 128, 'Password')
-    result = payment_engine.confirm_verification(g.current_user, txn_id, otp, password, client_ip())
-    messages = {
-        'released': 'Verified. Re-evaluation passed and the payment is complete.',
-        'escalated': 'Verified, but the payment still needs review by the fraud team.',
-        'blocked': 'Re-evaluation blocked this payment.',
-        'declined': 'The payment could not be completed.',
-    }
-    return ok(result, messages[result['outcome']])
+    if not (len(otp) == 6 and otp.isdigit()):
+        raise ApiError('The OTP is the 6-digit code that was sent to you.', 422, 'VALIDATION_ERROR', {'field': 'otp'})
+    result = payment_engine.confirm_verification(g.current_user, txn_id, otp, ip=client_ip())
+    return ok(result, result['message'])
 
 
 @bp.post('/<int:txn_id>/cancel')

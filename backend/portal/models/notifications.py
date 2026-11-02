@@ -13,6 +13,7 @@ class Notification(db.Model):
     transaction_id = db.Column(db.BigInteger, db.ForeignKey('transactions.id', ondelete='SET NULL'))
     is_read = db.Column(db.Boolean, nullable=False, default=False)
     is_simulated = db.Column(db.Boolean, nullable=False, default=False)
+    cleared_at = db.Column(DT3)          # hidden from the list by "Mark all read"; the row is kept
     created_at = db.Column(DT3, nullable=False, default=now)
 
     def to_dict(self):

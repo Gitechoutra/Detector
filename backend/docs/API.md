@@ -1,6 +1,6 @@
-﻿# API endpoints
+# API endpoints
 
-Generated with `flask routes`. All paths are JSON; protected routes need `Authorization: Bearer <token>`.
+Generated from the app's URL map (`flask routes`). All paths are JSON; protected routes need `Authorization: Bearer <token>`.
 
 | Method | Path | Handler |
 |---|---|---|
@@ -10,10 +10,14 @@ Generated with `flask routes`. All paths are JSON; protected routes need `Author
 | POST | `/api/auth/login` | auth.login |
 | POST | `/api/auth/logout` | auth.logout |
 | GET | `/api/auth/me` | auth.me |
-| GET | `/api/demo/info` | demo.info |
-| POST | `/api/demo/reset` | demo.reset |
-| POST | `/api/demo/scenarios/<code>/run` | demo.run |
+| POST | `/api/auth/register` | auth.register |
+| GET | `/api/detection/confirmations` | detection.confirmations |
+| GET | `/api/detection/engine` | detection.engine_overview |
+| POST | `/api/detection/engine/run` | detection.engine_run |
+| GET | `/api/detection/engine/runs/<int:run_id>` | detection.engine_run_detail |
 | GET | `/api/detection/live` | detection.live |
+| GET | `/api/detection/receiver-blocks` | detection.receiver_blocks |
+| POST | `/api/detection/receiver-blocks/<int:block_id>/lift` | detection.lift_receiver_block |
 | GET | `/api/detection/risk-categories` | detection.risk_categories |
 | PUT | `/api/detection/risk-categories` | detection.update_risk_categories |
 | GET | `/api/detection/rules` | detection.rules |
@@ -25,8 +29,16 @@ Generated with `flask routes`. All paths are JSON; protected routes need `Author
 | GET | `/api/detection/users` | detection.users |
 | GET | `/api/detection/watchlist` | detection.watchlist |
 | POST | `/api/detection/watchlist` | detection.add_watchlist |
-| PATCH | `/api/detection/watchlist/<int:entry_id>` | detection.toggle_watchlist |
 | DELETE | `/api/detection/watchlist/<int:entry_id>` | detection.delete_watchlist |
+| PATCH | `/api/detection/watchlist/<int:entry_id>` | detection.toggle_watchlist |
+| GET | `/api/frauder/attempts` | frauder.attempts |
+| GET | `/api/frauder/context` | frauder.context |
+| POST | `/api/frauder/login-attempt` | frauder.login_attempt |
+| POST | `/api/frauder/otp-attempt` | frauder.otp_attempt |
+| GET | `/api/frauder/records` | frauder.records |
+| POST | `/api/frauder/reset` | frauder.reset |
+| GET | `/api/frauder/transactions/<int:txn_id>` | frauder.transaction |
+| POST | `/api/frauder/transfer` | frauder.transfer |
 | GET | `/api/health` | meta.health |
 | GET | `/api/meta/locations` | meta.locations |
 | GET | `/api/meta/risk-categories` | meta.risk_categories |
@@ -39,17 +51,12 @@ Generated with `flask routes`. All paths are JSON; protected routes need `Author
 | GET | `/api/security/audit/verify` | security.verify_audit |
 | GET | `/api/security/events` | security.events |
 | GET | `/api/security/login-attempts` | security.login_attempts |
-| GET | `/api/simulation/history` | simulation.history |
-| GET | `/api/simulation/runs` | simulation.runs |
-| GET | `/api/simulation/scenarios` | simulation.scenarios |
-| POST | `/api/simulation/scenarios/<code>/run` | simulation.run_scenario |
-| POST | `/api/simulation/start` | simulation.start |
-| GET | `/api/simulation/stats` | simulation.stats |
-| GET | `/api/simulation/status` | simulation.status |
-| POST | `/api/simulation/stop` | simulation.stop |
 | POST | `/api/transactions/<int:txn_id>/cancel` | transactions.cancel |
+| POST | `/api/transactions/<int:txn_id>/confirmation` | transactions.respond |
+| POST | `/api/transactions/<int:txn_id>/report-fraud` | transactions.report_fraud |
 | POST | `/api/transactions/<int:txn_id>/verification/confirm` | transactions.confirm_verification |
 | POST | `/api/transactions/<int:txn_id>/verification/start` | transactions.start_verification |
+| GET | `/api/transactions/confirmations` | transactions.pending_confirmations |
 | POST | `/api/transactions/send` | transactions.send |
 | GET | `/api/user/dashboard` | user.dashboard |
 | POST | `/api/user/receivers/lookup` | user.lookup_receiver |

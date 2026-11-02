@@ -1,10 +1,12 @@
 import { dateTime, money, METHOD_LABEL } from '../utils/format';
-import { useConfirmationAnswer } from './SecurityConfirmation';
+import { OtpEntry, useConfirmationAnswer } from './SecurityConfirmation';
 import { Modal, OutcomeBadge, RiskScore, StatusBadge } from './ui';
 
 export default function TxnDetailModal({ txn, viewer = 'sender', onClose, onChange }) {
   const counterpart = viewer === 'sender' ? txn.receiver : txn.sender;
-  const canAct = viewer === 'sender' && txn.status === 'UNDER_REVIEW' && txn.confirmation?.status === 'PENDING';
+  const held = viewer === 'sender' && txn.status === 'UNDER_REVIEW';
+  const canAct = held && txn.confirmation?.status === 'PENDING';
+  const awaitingOtp = held && txn.confirmation?.status === 'CONFIRMED';
   const { answer, busy } = useConfirmationAnswer(() => { onChange?.(); onClose(); });
   return (
     <Modal title={`Payment ${txn.txn_ref}`} onClose={onClose} footer={canAct ? <>
@@ -27,7 +29,7 @@ export default function TxnDetailModal({ txn, viewer = 'sender', onClose, onChan
           <dt>Money</dt><dd>{txn.money_moved ? (viewer === 'sender' ? 'Debited' : 'Credited') : 'Not moved'}</dd>
           {viewer === 'sender' && txn.confirmation && <>
             <dt>Your answer</dt>
-            <dd>{txn.confirmation.response ? `${txn.confirmation.response === 'YES' ? 'YES, I initiated it' : 'NO, I did not initiate it'} · ${dateTime(txn.confirmation.responded_at)}`
+            <dd>{txn.confirmation.response ? `${txn.confirmation.response === 'YES' ? 'YES, I initiated it' : 'NO, I did not initiate it'} · ${dateTime(txn.confirmation.responded_at)}${txn.confirmation.otp && txn.confirmation.otp.status !== 'NOT_SENT' ? ` · OTP ${txn.confirmation.otp.status.toLowerCase()}` : ''}`
               : txn.confirmation.status === 'EXPIRED' ? 'No answer – expired' : `Waiting – answer by ${dateTime(txn.confirmation.expires_at)}`}</dd>
           </>}
         </dl>
@@ -45,7 +47,8 @@ export default function TxnDetailModal({ txn, viewer = 'sender', onClose, onChan
             </ul>
           </div>
         )}
-        {canAct && <p className="small muted">Security Verification Required: if you made this payment, answer YES and it is transferred after a final balance check. If you didn’t, answer NO and it is blocked immediately – no money moves.</p>}
+        {awaitingOtp && <OtpEntry txn={txn} onDone={() => { onChange?.(); onClose(); }} />}
+        {canAct && <p className="small muted">Suspicious transaction detected. If you made this payment, answer YES and verify the OTP sent to your registered phone and e-mail. If you didn’t, answer NO: it is stopped immediately, no money moves, and the receiver account is blocked.</p>}
         {txn.status === 'UNDER_REVIEW' && txn.review_stage === 'AWAITING_ANALYST' && (
           <div className="notice notice-warn">⏳ Waiting for a fraud analyst’s decision. Not debited.</div>
         )}

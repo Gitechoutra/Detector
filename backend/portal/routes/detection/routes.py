@@ -1,12 +1,14 @@
+import ipaddress
+import re
 from datetime import timedelta
 
 from flask import g, request
 from sqlalchemy import or_
 
 from portal.extensions import db
-from portal.models import (Account, Alert, FraudRule, LoginAttempt, RiskAssessment, RiskCategory, Role,
+from portal.models import (Account, Alert, DetectionRun, FraudRule, ReceiverBlock, LoginAttempt, RiskAssessment, RiskCategory, Role,
                       SecurityEvent, Transaction, TriggeredRule, User, WatchlistEntry)
-from portal.helpers import payment_engine
+from portal.helpers import detection_engine, payment_engine
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import DETECTION, client_ip, role_required
@@ -15,6 +17,29 @@ from . import bp
 
 
 WATCHLIST_TYPES = ('ACCOUNT', 'UPI', 'DEVICE', 'IP')
+UPI_RE = re.compile(r'^[a-z0-9._-]{2,64}@[a-z][a-z0-9]{1,30}$')
+ACCOUNT_RE = re.compile(r'^\d{9,18}$')
+
+
+def _watchlist_value(entity_type, value):
+    """Normalises and validates a watchlist value, so an entry can actually match."""
+    value = value.strip()
+    if entity_type == 'IP':
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            raise ApiError('Enter a valid IPv4 or IPv6 address.', 422, 'VALIDATION_ERROR', {'field': 'entity_value'})
+    if entity_type == 'UPI':
+        value = value.lower()
+        if not UPI_RE.match(value):
+            raise ApiError('Enter a valid UPI ID, e.g. name@fsbank.', 422, 'VALIDATION_ERROR',
+                           {'field': 'entity_value'})
+    elif entity_type == 'ACCOUNT' and not ACCOUNT_RE.match(value):
+        raise ApiError('An account number has 9 to 18 digits.', 422, 'VALIDATION_ERROR', {'field': 'entity_value'})
+    elif entity_type == 'DEVICE' and len(value) < 3:
+        raise ApiError('A device fingerprint has at least 3 characters.', 422, 'VALIDATION_ERROR',
+                       {'field': 'entity_value'})
+    return value
 
 
 def _filtered_transactions():
@@ -237,9 +262,7 @@ def add_watchlist():
     entity_type = (data.get('entity_type') or '').upper()
     if entity_type not in WATCHLIST_TYPES:
         raise ApiError('Type must be one of ' + ', '.join(WATCHLIST_TYPES), 422, 'VALIDATION_ERROR')
-    value = require_str(data, 'entity_value', 120, 'Value')
-    if entity_type == 'UPI':
-        value = value.lower()
+    value = _watchlist_value(entity_type, require_str(data, 'entity_value', 120, 'Value'))
     reason = require_str(data, 'reason', 255, 'Reason')
     entry = WatchlistEntry.query.filter_by(entity_type=entity_type, entity_value=value).first()
     if entry:
@@ -303,3 +326,55 @@ def search():
             .filter(or_(Transaction.txn_ref.like(f'%{q}%'), User.full_name.like(f'%{q}%')))
             .order_by(Transaction.id.desc()).limit(10).all())
     return ok([t.to_dict() for t in rows])
+
+
+# ── Detection Engine: replay the nine rules over stored transactions ───────
+
+@bp.get('/engine')
+@role_required(DETECTION)
+def engine_overview():
+    runs = DetectionRun.query.order_by(DetectionRun.id.desc()).limit(10).all()
+    return ok({'accounts': detection_engine.scan_accounts(), 'max_scan': detection_engine.MAX_SCAN,
+               'runs': [r.to_dict() for r in runs]})
+
+
+@bp.post('/engine/run')
+@role_required(DETECTION)
+def engine_run():
+    data = json_body()
+    account_id = parse_int(data.get('account_id'), 'account_id', minimum=1) if data.get('account_id') else None
+    days = parse_int(data.get('days'), 'days', minimum=1, maximum=3650) if data.get('days') else None
+    result = detection_engine.run(g.current_user, account_id=account_id, days=days,
+                                  include_simulated=data.get('include_simulated', True) is not False, ip=client_ip())
+    return ok(result.to_dict(with_results=True),
+              f'Scanned {result.txns_scanned} transaction(s): {result.txns_flagged} flagged by at least one rule.', 201)
+
+
+@bp.get('/engine/runs/<int:run_id>')
+@role_required(DETECTION)
+def engine_run_detail(run_id):
+    found = db.session.get(DetectionRun, run_id)
+    if found is None:
+        raise ApiError('Detection run not found.', 404, 'NOT_FOUND')
+    return ok(found.to_dict(with_results=True))
+
+
+# ── Receiver accounts blocked after an owner's NO ──────────────────────────
+
+@bp.get('/receiver-blocks')
+@role_required(DETECTION)
+def receiver_blocks():
+    status = request.args.get('status')
+    query = ReceiverBlock.query
+    if status in ('ACTIVE', 'LIFTED'):
+        query = query.filter_by(status=status)
+    return ok([b.to_dict() for b in query.order_by(ReceiverBlock.id.desc()).limit(200).all()])
+
+
+@bp.post('/receiver-blocks/<int:block_id>/lift')
+@role_required(DETECTION)
+def lift_receiver_block(block_id):
+    block = payment_engine.lift_receiver_block(g.current_user, block_id, json_body().get('reason'), client_ip())
+    message = ('Block lifted. The account can receive payments again.' if block.account.status == 'ACTIVE'
+               else 'Block lifted. The account stays blocked because of another active block.')
+    return ok(block.to_dict(), message)

@@ -39,5 +39,10 @@ def insert(conn, table, row):
     conn.execute(sa.text(f'INSERT INTO {table} ({cols}) VALUES ({params})'), row)
 
 
+def has_column(conn, table, column):
+    inspector = sa.inspect(conn)
+    return inspector.has_table(table) and column in {c['name'] for c in inspector.get_columns(table)}
+
+
 def id_of(conn, table, column, value):
     return conn.execute(sa.text(f'SELECT id FROM {table} WHERE {column} = :v'), {'v': value}).scalar()

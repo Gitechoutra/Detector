@@ -32,7 +32,9 @@ def write_audit(action, entity_type=None, entity_id=None, details=None, actor=No
     """Adds an audit row to the current DB transaction (the caller commits)."""
     details = json.loads(json.dumps(details or {}, default=str))
     entity_id = str(entity_id) if entity_id is not None else None
+    # Flush first: an audit row added earlier in this transaction must be the parent.
     # FOR UPDATE serialises writers so two rows can never chain to the same parent.
+    db.session.flush()
     prev = db.session.execute(
         text('SELECT row_hash FROM audit_logs ORDER BY id DESC LIMIT 1 FOR UPDATE')).scalar()
     prev = prev or GENESIS_HASH
@@ -55,11 +57,17 @@ def write_audit(action, entity_type=None, entity_id=None, details=None, actor=No
 def verify_chain():
     prev = GENESIS_HASH
     checked = 0
-    for row in AuditLog.query.order_by(AuditLog.id).yield_per(500):
-        expected = _digest(prev, row.actor_user_id, row.action, row.entity_type, row.entity_id,
-                           row.details, row.created_at)
-        if row.prev_hash != prev or row.row_hash != expected:
-            return {'valid': False, 'checked': checked, 'broken_at_id': row.id}
-        prev = row.row_hash
-        checked += 1
-    return {'valid': True, 'checked': checked, 'broken_at_id': None}
+    last_id = 0
+    while True:
+        # Buffered batches by id (not a streaming cursor that can be left half-read on the connection).
+        batch = AuditLog.query.filter(AuditLog.id > last_id).order_by(AuditLog.id).limit(500).all()
+        if not batch:
+            return {'valid': True, 'checked': checked, 'broken_at_id': None}
+        for row in batch:
+            expected = _digest(prev, row.actor_user_id, row.action, row.entity_type, row.entity_id,
+                               row.details, row.created_at)
+            if row.prev_hash != prev or row.row_hash != expected:
+                return {'valid': False, 'checked': checked, 'broken_at_id': row.id}
+            prev = row.row_hash
+            checked += 1
+        last_id = batch[-1].id

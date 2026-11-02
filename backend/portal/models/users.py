@@ -4,6 +4,7 @@ from portal.models.utils import now, iso
 
 class User(db.Model):
     __tablename__ = 'users'
+    __table_args__ = (db.UniqueConstraint('seed_key', name='uq_users_seed_key'),)
     id = db.Column(db.Integer, primary_key=True)
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=False, index=True)
     full_name = db.Column(db.String(100), nullable=False)
@@ -15,6 +16,9 @@ class User(db.Model):
     failed_login_count = db.Column(db.Integer, nullable=False, default=0)
     locked_until = db.Column(db.DateTime)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)
+    # Stable id of a predefined dummy account (rahul, analyst...). Its email and
+    # password come from .env and may change; the key never does.
+    seed_key = db.Column(db.String(20))
     is_simulated = db.Column(db.Boolean, nullable=False, default=False)
     last_login_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, nullable=False, default=now)

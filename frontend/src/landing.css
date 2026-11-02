@@ -266,7 +266,6 @@
 .fx-role-foot svg { transition: transform .25s; }
 .fx-role:hover .fx-role-foot { color: #fff; background: var(--tone); }
 .fx-role:hover .fx-role-foot svg { transform: translateX(4px); }
-.fx-role-demo { margin-top: 10px; text-align: center; font-size: 12px; color: var(--ink-2); }
 
 /* CTA */
 .fx-cta-wrap { padding-top: 0; }
@@ -288,7 +287,6 @@
 .fx-footer-grid a { color: #A9B3C9; font-size: 14px; transition: color .2s; }
 .fx-footer-grid a:hover { color: #fff; }
 .fx-footer-grid .fx-brand { color: #fff; }
-.fx-footer-demo { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.14); }
 .fx-copy { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 48px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.08); font-size: 13px; color: #6B7591; }
 
 /* Scroll reveal */

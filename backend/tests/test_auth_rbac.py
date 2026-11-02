@@ -80,3 +80,26 @@ def test_role_based_access_control(client):
         assert client.get(path, headers=headers).status_code == 200, path
 
     assert client.get('/api/user/dashboard').status_code == 401
+
+
+def test_logout_revokes_the_token(client):
+    headers = login(client, 'rahul@demo.bank')
+    assert client.get('/api/user/dashboard', headers=headers).status_code == 200
+    assert client.post('/api/auth/logout', headers=headers).status_code == 200
+    res = client.get('/api/user/dashboard', headers=headers)
+    assert res.status_code == 401 and res.get_json()['error']['code'] == 'TOKEN_REVOKED'
+    other = login(client, 'rahul@demo.bank')                     # a new login works as usual
+    assert client.get('/api/user/dashboard', headers=other).status_code == 200
+
+
+def test_watchlist_values_are_validated(client):
+    analyst = login(client, 'analyst@demo.bank')
+    url = '/api/detection/watchlist'
+    for entity_type, value in (('IP', 'not-an-ip'), ('IP', '999.1.1.1'), ('UPI', 'no-at-sign'), ('UPI', 'a@'),
+                               ('ACCOUNT', '12ab'), ('ACCOUNT', '123'), ('DEVICE', 'x')):
+        res = client.post(url, headers=analyst, json={'entity_type': entity_type, 'entity_value': value, 'reason': 'test'})
+        assert res.status_code == 422, (entity_type, value)
+    ok = client.post(url, headers=analyst, json={'entity_type': 'UPI', 'entity_value': ' Mule@FSBank ', 'reason': 'test'})
+    assert ok.status_code == 201 and ok.get_json()['data']['entity_value'] == 'mule@fsbank'
+    ip = client.post(url, headers=analyst, json={'entity_type': 'IP', 'entity_value': '2001:DB8::1', 'reason': 'test'})
+    assert ip.status_code == 201 and ip.get_json()['data']['entity_value'] == '2001:db8::1'

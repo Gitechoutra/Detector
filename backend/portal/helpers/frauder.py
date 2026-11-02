@@ -18,23 +18,23 @@ confirmation) decides."""
 import ipaddress
 import re
 from datetime import datetime, timedelta
-from decimal import ROUND_UP, Decimal
 
-from sqlalchemy import func
+from sqlalchemy import bindparam, func, text
 
 from portal.extensions import db
 from portal.helpers.audit import write_audit
 from portal.helpers.auth import _clear_expired_lock, register_attempt
 from portal.helpers.helpers import security_event, setting
 from portal.helpers.fraud_engine import band_floor
-from portal.helpers.payment_engine import auto_decisions, expire_confirmations, hard_block_rules, send_money
+from portal.helpers.payment_engine import expire_confirmations, hard_block_rules, send_money
 from portal.helpers.responses import ApiError
 from portal.helpers.validators import parse_amount
-from portal.models import (Alert, Device, FraudRule, Location, LoginAttempt, RiskAssessment, SecurityEvent,
-                           Transaction, User, WatchlistEntry, money, now)
+from portal.models import (Account, Alert, Device, Location, LoginAttempt, RiskAssessment, SecurityEvent,
+                           ReceiverBlock, Transaction, User, WatchlistEntry, money, now)
 
-VICTIMS = ('rahul@demo.bank', 'suresh@demo.bank', 'karan@demo.bank')
-RECEIVERS = ('priya@demo.bank', 'amit@demo.bank', 'quickcash@demo.bank')
+# Designated dummy accounts, by seed_key (their emails come from .env and may change).
+VICTIMS = ('rahul', 'suresh', 'karan')
+RECEIVERS = ('priya', 'amit', 'quickcash')
 SCENARIO_CODE = 'FRAUDER_MANUAL'
 # Typed device IDs are stored under this prefix, so an attacker value can
 # never collide with (or claim) a genuine customer device.
@@ -60,7 +60,7 @@ SCENARIOS = (
 
 def _victim(victim_id):
     user = db.session.get(User, int(victim_id)) if str(victim_id).isdigit() else None
-    if user is None or user.email not in VICTIMS:
+    if user is None or user.seed_key not in VICTIMS:
         raise ApiError('Choose one of the designated demo victim accounts.', 422, 'NOT_A_DEMO_VICTIM',
                        {'field': 'victim_id'})
     return user
@@ -68,7 +68,7 @@ def _victim(victim_id):
 
 def _receiver(receiver_id, victim):
     user = db.session.get(User, int(receiver_id)) if str(receiver_id).isdigit() else None
-    if user is None or user.email not in RECEIVERS or user.id == victim.id:
+    if user is None or user.seed_key not in RECEIVERS or user.id == victim.id:
         raise ApiError('Choose one of the designated demo receivers.', 422, 'NOT_A_DEMO_RECEIVER',
                        {'field': 'receiver_id'})
     return user
@@ -120,6 +120,21 @@ def _attacker_details(data, for_login=False):
     }
 
 
+CONTEXT_FIELDS = ('city', 'target_location', 'device_type', 'device_id', 'ip_address', 'use_registered_device',
+                  'demo_time')
+
+
+def _no_context(data, victim):
+    """No attempt context entered (the console no longer asks for one): the
+    attempt uses the victim's own home city and registered device, if any."""
+    scenario = (data.get('scenario') or '').strip().upper() or None
+    if scenario and scenario not in dict(SCENARIOS):
+        raise _invalid('scenario', 'Choose a fraud scenario from the list.')
+    return {'source': 'FRAUDER', 'city': victim.home_location.city if victim.home_location else None,
+            'location_id': victim.home_location_id, 'scenario': scenario,
+            'scenario_name': dict(SCENARIOS).get(scenario)}
+
+
 def _registered_device(victim):
     """The victim's own trusted device (remote-access scam)."""
     device = (Device.query.filter_by(user_id=victim.id, is_trusted=True)
@@ -165,51 +180,26 @@ def _stored(details):
 
 # ── Read models ─────────────────────────────────────────────────────────────
 
-def _history(account_id, days=90):
-    row = (db.session.query(func.count(Transaction.id), func.avg(Transaction.amount))
-           .filter(Transaction.sender_account_id == account_id, Transaction.status == 'COMPLETED',
-                   Transaction.txn_time >= now() - timedelta(days=days)).one())
-    return row[0], (Decimal(row[1]) if row[1] is not None else None)
-
-
-def _idle_days(account):
-    last = account.last_txn_at or account.created_at
-    return (now() - last).days
-
-
 def _victim_dict(user):
-    _clear_expired_lock(user, now())
+    """What the console's target list needs (the old profile cards are gone)."""
     account = user.primary_account
-    count, avg = _history(account.id)
-    own = Device.query.filter_by(user_id=user.id, is_trusted=True).order_by(Device.last_seen_at.desc()).first()
-    attacker = (Device.query.filter(Device.user_id == user.id, Device.fingerprint.like(ATTACKER_PREFIX + '%'))
-                .order_by(Device.id.desc()).limit(8).all())
-    return {
-        'id': user.id, 'name': user.full_name, 'upi_id': account.upi_id, 'balance': money(account.balance),
-        'home_city': user.home_location.city if user.home_location else None, 'status': user.status,
-        'failed_login_count': user.failed_login_count,
-        'locked_until': user.locked_until.isoformat(timespec='minutes') if user.locked_until else None,
-        'own_device': own.device_name if own else None,
-        # Device IDs the presenter typed before, shown for reference only.
-        'attacker_devices': [{'device_id': d.fingerprint[len(ATTACKER_PREFIX):], 'name': d.device_name,
-                              'is_trusted': d.is_trusted} for d in attacker],
-        'payments_90d': count, 'average_90d': money(avg), 'idle_days': _idle_days(account),
-        'is_dormant_demo': user.email == 'suresh@demo.bank',
-    }
+    return {'id': user.id, 'name': user.full_name, 'upi_id': account.upi_id, 'balance': money(account.balance),
+            'home_city': user.home_location.city if user.home_location else None, 'status': user.status}
 
 
 def context():
     expire_confirmations()
-    victims = User.query.filter(User.email.in_(VICTIMS)).all()
-    receivers = User.query.filter(User.email.in_(RECEIVERS)).all()
+    victims = User.query.filter(User.seed_key.in_(VICTIMS)).all()
+    receivers = User.query.filter(User.seed_key.in_(RECEIVERS)).all()
     listed = {w.entity_value for w in WatchlistEntry.query.filter_by(is_active=True).all()}
     order = {e: i for i, e in enumerate(VICTIMS + RECEIVERS)}
     return {
-        'victims': [_victim_dict(u) for u in sorted(victims, key=lambda u: order[u.email])],
+        'victims': [_victim_dict(u) for u in sorted(victims, key=lambda u: order[u.seed_key])],
         'receivers': [{'id': u.id, 'name': u.full_name, 'upi_id': u.primary_account.upi_id,
                        'balance': money(u.primary_account.balance),
-                       'watchlisted': u.primary_account.upi_id in listed or u.primary_account.account_number in listed}
-                      for u in sorted(receivers, key=lambda u: order[u.email])],
+                       'watchlisted': u.primary_account.upi_id in listed or u.primary_account.account_number in listed,
+                       'blocked': u.primary_account.status == 'BLOCKED'}
+                      for u in sorted(receivers, key=lambda u: order[u.seed_key])],
         # Suggestions for the free-text fields; nothing is pre-selected.
         'cities': [l.city for l in Location.query.order_by(Location.city).all()],
         'device_types': list(DEVICE_TYPES),
@@ -217,7 +207,6 @@ def context():
         'policy': {'confirmation_expiry_minutes': setting('CONFIRMATION_EXPIRY_MINUTES'),
                    'expiry_action': setting('CONFIRMATION_EXPIRY_ACTION', str).upper(),
                    'hard_block_rules': sorted(hard_block_rules()),
-                   'auto_decisions': auto_decisions(),
                    'review_floor': band_floor('REVIEW'), 'block_floor': band_floor('BLOCKED')},
     }
 
@@ -234,6 +223,13 @@ def detection_result(txn, balances_before=None):
         'rules_evaluated': initial.rules_evaluated if initial else None,
         'evaluation_ms': float(initial.latency_ms) if initial and initial.latency_ms is not None else None,
         'timeline': _timeline(txn),
+        'simulated_details': None,
+        'confirmation': None,
+        # Both texts describe the owner's approval step, which the Frauder does not see.
+        'risk_explanation': None, 'final_reason': None, 'decline_reason': None,
+        'outcome_label': txn.frauder_label(),
+        'display_status': txn.frauder_label(),
+        'receiver_account_status': txn.receiver_account.status,
         'balances': {
             'sender': {'name': txn.sender_account.user.full_name, 'after': money(txn.sender_account.balance),
                        'before': (balances_before or {}).get('sender')},
@@ -287,21 +283,8 @@ def _timeline(txn):
             {'at': first.created_at, 'kind': 'engine', 'label': 'Risk score calculated',
              'detail': f'min(100, {" + ".join(str(t["weight"]) for t in fired) or "0"}) = {first.risk_score}'},
             {'at': first.created_at, 'kind': 'decision', 'label': 'Risk band (recorded)',
-             'detail': f'{first.decision} – ' + ('the account owner decides (YES/NO)' if fired else 'no rule triggered: normal payment')},
+             'detail': first.decision},
         ]
-    if txn.confirmation_status:
-        items.append({'at': txn.decided_at or txn.created_at, 'kind': 'confirm',
-                      'label': f'Confirmation requested from {owner}',
-                      'detail': f'“Security Verification Required – did you initiate this transaction?” – answer by '
-                                f'{txn.confirmation_expires_at:%H:%M}' if txn.confirmation_expires_at else ''})
-        if txn.confirmation_responded_at:
-            items.append({'at': txn.confirmation_responded_at, 'kind': 'confirm',
-                          'label': f'{owner} answered {txn.confirmation_response}',
-                          'detail': 'Not me → blocked immediately' if txn.confirmation_response == 'NO'
-                          else 'Yes, I initiated it → re-validated and authorized'})
-        if txn.confirmation_status == 'EXPIRED':
-            items.append({'at': txn.confirmation_expires_at, 'kind': 'confirm', 'label': 'Confirmation expired',
-                          'detail': 'No answer in time – EXPIRED, never authorized automatically'})
     for later in assessments[1:]:
         items.append({'at': later.created_at, 'kind': 'engine', 'label': 'Re-evaluated',
                       'detail': f'{later.assessment_type.replace("_", " ").lower()}: score {later.risk_score} → '
@@ -312,13 +295,13 @@ def _timeline(txn):
     items.sort(key=lambda i: i['at'] or txn.created_at)
 
     end = txn.completed_at or txn.confirmation_responded_at or txn.decided_at or txn.created_at
+    label = txn.frauder_label()
     items.append({'at': max(end, items[-1]['at'] or end), 'kind': 'money',
-                  'label': ('Money transferred' if txn.status == 'COMPLETED'
-                            else 'Waiting – no money moved yet' if txn.status == 'UNDER_REVIEW' else 'Money not moved'),
-                  'detail': txn.final_reason or {
-                      'COMPLETED': 'Sender debited and receiver credited in one database transaction.',
-                      'UNDER_REVIEW': f'Held until {owner} answers YES (authorize) or NO (block).',
-                  }.get(txn.status, 'Neither balance changed.')})
+                  'label': {'SUCCESS': 'Success – money transferred', 'CANCELLED': 'Cancelled – no money moved',
+                            'PROCESSING': 'Processing – no money moved yet'}.get(label, f'{label.title()} – no money moved'),
+                  'detail': {'SUCCESS': 'Sender debited and receiver credited in one database transaction.',
+                             'CANCELLED': 'The transaction was cancelled. Neither balance changed.',
+                             'PROCESSING': 'The transaction is being processed.'}.get(label, 'Neither balance changed.')})
     return [{**i, 'at': i['at'].isoformat(timespec='seconds') if i['at'] else None} for i in items]
 
 
@@ -328,7 +311,7 @@ def _device_label(fingerprint):
 
 def attempts(limit=40):
     expire_confirmations()
-    victims = [u.id for u in User.query.filter(User.email.in_(VICTIMS)).all()]
+    victims = [u.id for u in User.query.filter(User.seed_key.in_(VICTIMS)).all()]
     rows = []
     for la in (LoginAttempt.query.filter(LoginAttempt.user_id.in_(victims), LoginAttempt.is_simulated.is_(True))
                .order_by(LoginAttempt.id.desc()).limit(limit).all()):
@@ -345,17 +328,12 @@ def attempts(limit=40):
                      'detail': se.ip_address or '', 'outcome': 'FAILED'})
     for t in (Transaction.query.filter(Transaction.scenario_code == SCENARIO_CODE)
               .order_by(Transaction.id.desc()).limit(limit).all()):
-        sim = t.simulated_details or {}
-        device = ('registered device' if sim.get('use_registered_device')
-                  else f"{sim.get('device_type')} #{sim.get('device_id')}" if sim.get('device_id') else '?')
         rows.append({'type': 'TRANSFER', 'at': t.created_at, 'victim': t.sender_account.user.full_name,
                      'transaction_id': t.id, 'txn_ref': t.txn_ref,
                      'summary': f"₹{money(t.amount):,.0f} → {t.receiver_account.user.full_name}",
-                     'detail': f"{sim.get('city') or (t.location.city if t.location else '?')} · {device} · "
-                               f"{t.ip_address or '?'}",
-                     'scenario': sim.get('scenario_name'), 'simulated_details': sim or None,
+                     'detail': f"{t.location.city if t.location else '?'} · {t.ip_address or '?'}",
                      'rules': [h.rule_code for h in t.latest_hits()], 'risk_score': t.risk_score,
-                     'outcome': t.status, 'outcome_label': t.outcome_label(), 'confirmation': t.confirmation_dict(),
+                     'outcome': t.frauder_label(), 'outcome_label': t.frauder_label(),
                      'money_moved': t.status == 'COMPLETED'})
     rows.sort(key=lambda r: r['at'], reverse=True)
     return [{**r, 'at': r['at'].isoformat(timespec='seconds')} for r in rows[:limit]]
@@ -418,7 +396,8 @@ def otp_attempt(frauder, data):
 def transfer(frauder, data, idempotency_key):
     victim = _victim(data.get('victim_id'))
     receiver = _receiver(data.get('receiver_id'), victim)
-    details = _attacker_details(data)
+    with_context = any(data.get(k) not in (None, '', False) for k in CONTEXT_FIELDS)
+    details = _attacker_details(data) if with_context else _no_context(data, victim)
     txn_time = _demo_time(data.get('demo_time'))
     if txn_time:
         details['demo_time'] = txn_time.strftime('%H:%M')
@@ -430,12 +409,19 @@ def transfer(frauder, data, idempotency_key):
         if existing:
             return detection_result(existing), True
 
-    device = _registered_device(victim) if details['use_registered_device'] else _attacker_device(victim, details)
+    if not with_context:
+        device = (Device.query.filter_by(user_id=victim.id, is_trusted=True)
+                  .order_by(Device.last_seen_at.desc()).first())
+    elif details['use_registered_device']:
+        device = _registered_device(victim)
+    else:
+        device = _attacker_device(victim, details)
     before = {'sender': money(victim.primary_account.balance), 'receiver': money(receiver.primary_account.balance)}
     db.session.commit()   # persist a newly created attacker device before the payment transaction
     txn, replayed = send_money(victim, 'UPI', {'upi_id': receiver.primary_account.upi_id}, amount,
                                remarks='Frauder attempt', idempotency_key=idempotency_key,
-                               device_id=device.id, ip=details['ip_address'], location_id=details['location_id'],
+                               device_id=device.id if device else None, ip=details.get('ip_address'),
+                               location_id=details['location_id'],
                                simulated=True, scenario_code=SCENARIO_CODE, fraud_label=True, txn_time=txn_time,
                                simulated_details=_stored(details), owner_must_confirm=True)
     write_audit('FRAUDER_TRANSFER_ATTEMPT', 'transaction', txn.id,
@@ -445,72 +431,173 @@ def transfer(frauder, data, idempotency_key):
     return detection_result(txn, before), replayed
 
 
-# ── Guidance for the nine rules (text only – nothing is filled in) ──────────
+# ── Reset: undo only what the Frauder did ──────────────────────────────────
 
-def _inr(value):
-    return f'₹{Decimal(value):,.0f}'
+def reset_attempts(actor=None):
+    """Undo only what the Frauder did, leaving every genuine payment,
+    registered user and unrelated record alone.
+
+    Money is restored by reversing each completed simulated payment (sender
+    gets it back, receiver gives it back), so balances return to exactly what
+    they would be had the simulation never run – even if people also made real
+    payments in between."""
+    from portal.helpers.payment_engine import _lock_accounts
+
+    sim_txns = Transaction.query.filter_by(is_simulated=True).all()
+    ids = [t.id for t in sim_txns]
+    touched = {t.sender_account_id for t in sim_txns} | {t.receiver_account_id for t in sim_txns}
+
+    completed = [t for t in sim_txns if t.status == 'COMPLETED']
+    reversed_total = 0
+    if completed:
+        accounts = _lock_accounts(*{a for t in completed for a in (t.sender_account_id, t.receiver_account_id)})
+        for t in completed:
+            accounts[t.sender_account_id].balance += t.amount
+            accounts[t.receiver_account_id].balance -= t.amount
+            reversed_total += t.amount
+        short = [a.user.full_name for a in accounts.values() if a.balance < 0]
+        if short:
+            db.session.rollback()
+            raise ApiError(f'Cannot reverse the simulation: {", ".join(short)} no longer hold(s) the simulated '
+                           f'money.', 409, 'REVERSAL_IMPOSSIBLE')
+
+    counts = {}
+
+    def run(label, sql, params=None):
+        counts[label] = db.session.execute(text(sql), params or {}).rowcount
+
+    # IPs the presenter typed (transfers and logins) – auto-watchlisted ones are removed too.
+    typed_ips = ({t.ip_address for t in sim_txns if t.ip_address}
+                 | {ip for (ip,) in db.session.execute(text(
+                     'SELECT DISTINCT ip_address FROM login_attempts WHERE is_simulated = 1 AND ip_address IS NOT NULL'))})
+    counts['watchlist_typed_ips'] = 0
+    if typed_ips:
+        counts['watchlist_typed_ips'] = db.session.execute(
+            text("DELETE FROM watchlist WHERE source = 'AUTO' AND entity_type = 'IP' AND entity_value IN :ips")
+            .bindparams(bindparam('ips', expanding=True)), {'ips': list(typed_ips)}).rowcount
+    in_ids = {'ids': ids or [0]}
+    expanding = lambda sql: text(sql).bindparams(bindparam('ids', expanding=True))  # noqa: E731
+    _undo_receiver_blocks(ids, counts)
+    for label, sql in (
+        ('simulation_events', 'DELETE FROM simulation_events'),
+        ('notifications', 'DELETE FROM notifications WHERE is_simulated = 1 OR transaction_id IN :ids'),
+        ('alerts', 'DELETE FROM alerts WHERE is_simulated = 1 OR transaction_id IN :ids'),
+        ('security_events', 'DELETE FROM security_events WHERE is_simulated = 1 OR transaction_id IN :ids'),
+        ('login_attempts', 'DELETE FROM login_attempts WHERE is_simulated = 1'),
+        ('transactions', 'DELETE FROM transactions WHERE id IN :ids'),
+        ('simulation_runs', 'DELETE FROM simulation_runs'),
+        ('watchlist', "DELETE FROM watchlist WHERE source = 'AUTO' AND (entity_value LIKE 'sim-atk-%' "
+                      "OR entity_value LIKE '198.51.100.%')"),
+        ('devices', "DELETE FROM devices WHERE fingerprint LIKE 'sim-atk-%'"),
+    ):
+        counts[label] = db.session.execute(expanding(sql) if ':ids' in sql else text(sql),
+                                           in_ids if ':ids' in sql else {}).rowcount
+
+    # last_txn_at back to what the remaining (real) history says.
+    for account in Account.query.filter(Account.id.in_(touched or [0])).all():
+        account.last_txn_at = db.session.execute(text(
+            "SELECT MAX(txn_time) FROM transactions WHERE status = 'COMPLETED' "
+            "AND (sender_account_id = :a OR receiver_account_id = :a)"), {'a': account.id}).scalar()
+    run('unlocked_dummy_users', "UPDATE users SET status = 'ACTIVE', failed_login_count = 0, locked_until = NULL "
+                               "WHERE is_demo = 1 AND status = 'LOCKED'")
+    run('reset_failed_counts', 'UPDATE users SET failed_login_count = 0 WHERE is_demo = 1')
+
+    counts['amount_reversed'] = float(reversed_total)
+    write_audit('SIMULATION_RESET', 'system', None, counts, actor=actor)
+    db.session.commit()
+    return counts
 
 
-def rule_guide():
-    """Hints built from the *configured* thresholds and the victims' real
-    history. They only say what to type; the presenter enters every value
-    and the engine decides."""
-    p = {r.code: r.params for r in FraudRule.query.all()}
-    w = {r.code: r.weight for r in FraudRule.query.all()}
-    active = {r.code: r.is_active for r in FraudRule.query.all()}
-    rahul = User.query.filter_by(email='rahul@demo.bank').first()
-    suresh = User.query.filter_by(email='suresh@demo.bank').first()
-    quickcash = User.query.filter_by(email='quickcash@demo.bank').first()
-    home = rahul.home_location.city if rahul.home_location else 'his home city'
-    hard = hard_block_rules()
+# ── Fraud detection records (real data only) ───────────────────────────────
 
-    count, avg = _history(rahul.primary_account.id, p['R1']['lookback_days'])
-    if count >= p['R1']['min_history_txns']:
-        limit = avg * Decimal(str(p['R1']['multiplier']))
-        r1_amount = (limit * Decimal('1.2')).quantize(Decimal('1000'), rounding=ROUND_UP)
-        r1_hint = (f"Rahul’s average over his last {count} payments is {_inr(avg)}, so R1 fires above "
-                   f"{p['R1']['multiplier']}× that = {_inr(limit)}. Send about {_inr(r1_amount)} and tick "
-                   f"“Use victim’s registered device” so R4 stays quiet.")
-    else:
-        r1_hint = (f"Rahul has only {count} completed payment(s) in {p['R1']['lookback_days']} days, so R1 uses the "
-                   f"no-history limit of {_inr(p['R1']['no_history_threshold'])}. Send more than that, or first make "
-                   f"{p['R1']['min_history_txns']} small genuine payments as Rahul.")
-    r7 = p['R7']
-    r7_low = Decimal(str(r7['reporting_threshold'])) * (100 - Decimal(str(r7['band_percent']))) / 100
+def _flagged_transactions(limit):
+    """Payments on which the engine detected risk or asked the owner, newest first.
+    The seeded sample history is not a detection record and is left out."""
+    return (Transaction.query
+            .filter(db.or_(Transaction.risk_score > 0, Transaction.confirmation_status.isnot(None)),
+                    db.or_(Transaction.scenario_code.is_(None), Transaction.scenario_code != 'SEED_HISTORY'))
+            .order_by(Transaction.id.desc()).limit(limit).all())
 
-    guide = [
-        {'code': 'R1', 'title': 'High transaction amount', 'hint': r1_hint},
-        {'code': 'R2', 'title': 'Transaction velocity',
-         'hint': f"Keep the same details and press Attempt Transaction {p['R2']['max_txns'] + 1} times with a small "
-                 f"amount (e.g. ₹200) within {p['R2']['window_minutes']} minutes. The "
-                 f"{p['R2']['max_txns'] + 1}th triggers R2."},
-        {'code': 'R3', 'title': 'Impossible travel',
-         'hint': f"Send ₹500 with city {home}, then within {p['R3']['window_minutes']} minutes type a city at least "
-                 f"{p['R3']['min_distance_km']} km away (e.g. Delhi) and send again."},
-        {'code': 'R4', 'title': 'New device + high amount',
-         'hint': f"Type a device ID never used before (e.g. ATK-PHONE-01) and send more than "
-                 f"{_inr(p['R4']['amount_threshold'])}."},
-        {'code': 'R5', 'title': 'Odd-hour transaction',
-         'hint': f"Tick “Use demo clock”, enter a time between {p['R5']['start_hour']:02d}:00 and "
-                 f"{p['R5']['end_hour']:02d}:00 (e.g. 02:30) and send more than {_inr(p['R5']['amount_threshold'])}."},
-        {'code': 'R6', 'title': 'Watch-listed counterparty',
-         'hint': f"Choose {quickcash.full_name} ({quickcash.primary_account.upi_id}) as the receiver – it is on the "
-                 f"watchlist." + (" R6 is a hard-block rule: even if the owner answers YES, the payment stays "
-                                  "blocked." if 'R6' in hard else '')},
-        {'code': 'R7', 'title': 'Transaction structuring',
-         'hint': f"Send {r7['min_count']} payments between {_inr(r7_low)} and "
-                 f"{_inr(Decimal(str(r7['reporting_threshold'])) - 1)} within {r7['window_hours']} hours – just under "
-                 f"the {_inr(r7['reporting_threshold'])} reporting threshold."},
-        {'code': 'R8', 'title': 'Dormant account reactivation',
-         'hint': f"Target {suresh.full_name} – the designated dormant demo account, idle for "
-                 f"{_idle_days(suresh.primary_account)} days (limit {p['R8']['inactive_days']}). Send at least "
-                 f"{_inr(p['R8']['amount_threshold'])}."},
-        {'code': 'R9', 'title': 'Suspicious login / account takeover',
-         'hint': f"Click “Wrong password” {p['R9']['failed_login_threshold']} times, then “Log in with stolen "
-                 f"password” – all with the same new device ID and a city other than {home}. Then attempt a transfer "
-                 f"of at least {_inr(p['R9']['min_amount'])} with that same device ID (keep it ≤ "
-                 f"{_inr(p['R4']['amount_threshold'])} to see R9 on its own)."},
-    ]
-    for g in guide:
-        g.update({'weight': w[g['code']], 'active': active[g['code']], 'hard_block': g['code'] in hard})
-    return guide
+
+def _record(t):
+    assessment = (RiskAssessment.query.filter_by(transaction_id=t.id).order_by(RiskAssessment.id).first())
+    return {
+        'transaction_id': t.id, 'txn_ref': t.txn_ref, 'amount': money(t.amount), 'payment_method': t.payment_method,
+        'sender': t.sender_account.user.full_name, 'sender_upi': t.sender_account.upi_id,
+        'receiver': t.receiver_account.user.full_name, 'receiver_upi': t.receiver_account.upi_id,
+        'receiver_account_status': t.receiver_account.status,
+        'source': 'Frauder attempt' if t.is_simulated else 'Customer payment',
+        'risk_score': t.risk_score, 'risk_band': t.decision,
+        'risk_factors': [{'code': h.rule_code, 'name': h.rule.name, 'weight': h.weight_applied, 'reason': h.reason}
+                         for h in t.latest_hits()],
+        'user_response': t.confirmation_response, 'responded_at': t.confirmation_responded_at.isoformat(
+            timespec='seconds') if t.confirmation_responded_at else None,
+        'otp': t.otp_dict() if t.status != 'UNDER_REVIEW' and t.confirmation_response == 'YES' else None,
+        'status': t.frauder_label(), 'outcome_label': t.frauder_label(),
+        'txn_time': t.txn_time.isoformat(timespec='seconds'),
+        'detected_at': (assessment.created_at if assessment else t.decided_at or t.created_at).isoformat(
+            timespec='seconds'),
+    }
+
+
+def records(limit=100):
+    """What the fraud engine actually recorded: flagged transactions, flagged and
+    blocked receiver accounts. Nothing here is typed in, hard-coded or seeded."""
+    expire_confirmations()
+    rows = [_record(t) for t in _flagged_transactions(limit)]
+    blocks = ReceiverBlock.query.order_by(ReceiverBlock.id.desc()).limit(limit).all()
+    accounts = {a.account_number: a for a in Account.query.all()}
+    accounts.update({a.upi_id: a for a in accounts.values()})
+    flagged = {}
+    # Seeded starter entries are configuration, not detections: only the engine's
+    # (AUTO) and analysts' (MANUAL) flags count.
+    for w in (WatchlistEntry.query.filter(WatchlistEntry.is_active.is_(True), WatchlistEntry.source != 'SEED',
+                                          WatchlistEntry.entity_type.in_(('UPI', 'ACCOUNT')))
+              .order_by(WatchlistEntry.id.desc()).all()):
+        account = accounts.get(w.entity_value)
+        key = account.id if account else w.entity_value
+        entry = flagged.setdefault(key, {
+            'account_id': account.id if account else None,
+            'name': account.user.full_name if account else None,
+            'upi_id': account.upi_id if account else (w.entity_value if w.entity_type == 'UPI' else None),
+            'account_number': account.account_number if account else (
+                w.entity_value if w.entity_type == 'ACCOUNT' else None),
+            'account_status': account.status if account else None,
+            'reason': w.reason, 'source': w.source, 'flagged_at': w.created_at.isoformat(timespec='seconds')})
+        entry['flagged_at'] = min(entry['flagged_at'], w.created_at.isoformat(timespec='seconds'))
+    return {
+        'summary': {
+            'flagged_transactions': len(rows),
+            'processing': sum(1 for r in rows if r['status'] == 'PROCESSING'),
+            'successful': sum(1 for r in rows if r['status'] == 'SUCCESS'),
+            'cancelled': sum(1 for r in rows if r['status'] == 'CANCELLED'),
+            'user_yes': sum(1 for r in rows if r['user_response'] == 'YES'),
+            'user_no': sum(1 for r in rows if r['user_response'] == 'NO'),
+            'otp_verified': sum(1 for r in rows if (r['otp'] or {}).get('status') == 'VERIFIED'),
+            'blocked_receivers': len({b.account_id for b in blocks if b.status == 'ACTIVE'}),
+            'flagged_receivers': len(flagged),
+        },
+        'transactions': rows,
+        'blocked_receivers': [b.to_dict() for b in blocks],
+        'flagged_receivers': list(flagged.values()),
+    }
+
+
+def _undo_receiver_blocks(sim_txn_ids, counts):
+    """Blocks caused by Frauder attempts are undone with them: the block records
+    go, their watchlist flags go, and an account with no other active block is
+    ACTIVE again. Blocks from genuine customer reports stay."""
+    blocks = ReceiverBlock.query.filter(ReceiverBlock.transaction_id.in_(sim_txn_ids or [0])).all()
+    accounts = {b.account for b in blocks}
+    for block in blocks:
+        db.session.delete(block)
+    db.session.flush()
+    for account in accounts:
+        if ReceiverBlock.query.filter_by(account_id=account.id, status='ACTIVE').count():
+            continue
+        if account.status == 'BLOCKED':
+            account.status = 'ACTIVE'
+        WatchlistEntry.query.filter(WatchlistEntry.source == 'AUTO',
+                                    WatchlistEntry.entity_value.in_([account.upi_id, account.account_number]),
+                                    WatchlistEntry.reason.like('Receiver blocked:%')).delete(synchronize_session=False)
+    counts['receiver_blocks'] = len(blocks)

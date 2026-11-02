@@ -10,7 +10,6 @@ def init_app(app):
     from .alerts import bp as alerts_bp
     from .analytics import bp as analytics_bp
     from .authentication import bp as authentication_bp
-    from .demo import bp as demo_bp
     from .detection import bp as detection_bp
     from .meta import bp as meta_bp
     from .notifications import bp as notifications_bp
@@ -21,6 +20,6 @@ def init_app(app):
     from .users import bp as users_bp
 
     for bp in (authentication_bp, meta_bp, users_bp, receivers_bp, transactions_bp, detection_bp, alerts_bp,
-               notifications_bp, analytics_bp, security_bp, frauder_bp, demo_bp):
+               notifications_bp, analytics_bp, security_bp, frauder_bp):
         app.register_blueprint(bp)
-    app.logger.info('Registered %d route packages', 12)
+    app.logger.info('Registered %d route packages', 11)

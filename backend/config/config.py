@@ -33,8 +33,10 @@ class Config:
     }
 
     CORS_ORIGINS = [o.strip() for o in os.environ.get('CORS_ORIGINS', 'http://localhost:5173').split(',')]
-    DEMO_MODE_ENABLED = _flag('DEMO_MODE_ENABLED', False)
     JSON_SORT_KEYS = False
+    # Where the dummy-account credentials (SEED_<KEY>_EMAIL / _PASSWORD) are read
+    # from: None = the environment (.env), falling back to .env.example.
+    SEED_ACCOUNT_ENV = None
 
     @classmethod
     def validate(cls):
@@ -58,7 +60,8 @@ def _test_database_url():
 class TestConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = _test_database_url()
-    DEMO_MODE_ENABLED = True
+    # Tests always use the .env.example credentials, whatever a developer's .env says.
+    SEED_ACCOUNT_ENV = {}
 
     @classmethod
     def validate(cls):

@@ -177,27 +177,27 @@ export default function Overview() {
   );
 }
 
-// How every payment ended up where it is: decided by the risk score alone
-// (in the same request) or after the owner's answer / an analyst.
+// How every payment ended up where it is: no risk factor (straight through),
+// or held for the owner's YES + OTP / NO, an analyst, or an absolute restriction.
 const OUTCOMES = [
-  ['auto_approved', 'Approved automatically', 'Score below the review threshold', 'green'],
-  ['auto_blocked', 'Blocked automatically', 'Score reached the blocking threshold', 'red'],
-  ['pending_owner', 'Pending owner YES/NO', 'Review band – nothing debited yet', 'amber'],
+  ['auto_approved', 'No risk detected', 'No rule fired – completed at once', 'green'],
+  ['auto_blocked', 'Blocked by a restriction', 'Absolute restriction – no question asked', 'red'],
+  ['pending_owner', 'Pending owner verification', 'Risk detected – nothing debited yet', 'amber'],
   ['awaiting_analyst', 'Under analyst review', 'Handed to the fraud team', 'purple'],
-  ['owner_approved', 'Approved after review', 'Owner answered YES', 'green'],
+  ['owner_approved', 'Approved after verification', 'Owner answered YES and verified the OTP', 'green'],
   ['owner_blocked', 'Blocked after review', 'Owner answered NO', 'red'],
   ['expired', 'Expired', 'No answer in time – never sent', 'slate'],
 ];
 
 function DecisionBreakdown({ totals }) {
   const total = totals.total || 0;
-  const automatic = totals.auto_approved + totals.auto_blocked;
+  const verified = total - totals.auto_approved;
   return (
     <div className="card mt-16">
       <div className="card-head">
         <h2>⚡ How payments were decided</h2>
         <span className="small muted">
-          {total ? `${Math.round((automatic / total) * 100)}% decided automatically by the risk score` : 'No transactions yet'}
+          {total ? `${Math.round((verified / total) * 100)}% had a risk factor and needed the owner’s verification` : 'No transactions yet'}
         </span>
       </div>
       {total > 0 && (

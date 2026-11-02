@@ -22,3 +22,6 @@ from portal.models.simulation_runs import SimulationRun  # noqa: F401
 from portal.models.simulation_events import SimulationEvent  # noqa: F401
 from portal.models.audit_logs import AuditLog  # noqa: F401
 from portal.models.system_settings import SystemSetting  # noqa: F401
+from portal.models.detection_runs import DetectionRun  # noqa: F401
+from portal.models.receiver_blocks import ReceiverBlock  # noqa: F401
+from portal.models.revoked_tokens import RevokedToken  # noqa: F401

@@ -8,14 +8,8 @@ import { money, timeOnly } from '../../utils/format';
 
 const newKey = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
 // Every field starts empty: nothing is guessed, geolocated or pre-selected.
-const BLANK = {
-  victim_id: '', receiver_id: '', amount: '', scenario: '',
-  city: '', target_location: '', device_type: '', device_id: '', use_registered_device: false, ip_address: '',
-  use_clock: false, demo_time: '',
-};
+const BLANK = { victim_id: '', receiver_id: '', amount: '', scenario: '' };
 const STORE = 'frauder-attack-form';
-const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-const looksLikeIp = (v) => IPV4.test(v) || (v.includes(':') && /^[0-9a-fA-F:.]+$/.test(v));
 
 function loadForm() {
   try {
@@ -28,7 +22,6 @@ function loadForm() {
 export default function FrauderConsole() {
   const toast = useToast();
   const [ctx, setCtx] = useState(null);
-  const [guide, setGuide] = useState([]);
   const [history, setHistory] = useState([]);
   const [form, setForm] = useState(loadForm);
   const [busy, setBusy] = useState('');
@@ -39,9 +32,8 @@ export default function FrauderConsole() {
 
   const load = useCallback(async () => {
     try {
-      const [c, g, h] = await Promise.all([get('/frauder/context'), get('/frauder/rule-guide'), get('/frauder/attempts')]);
+      const [c, h] = await Promise.all([get('/frauder/context'), get('/frauder/attempts')]);
       setCtx(c);
-      setGuide(g);
       setHistory(h);
     } catch (e) {
       toast(errorMessage(e), 'error');
@@ -55,7 +47,7 @@ export default function FrauderConsole() {
     try { sessionStorage.setItem(STORE, JSON.stringify(form)); } catch { /* storage unavailable */ }
   }, [form]);
 
-  // While the owner has not answered, follow the attempt live.
+  // While the attempt is processing, follow it live.
   const pendingId = result?.status === 'UNDER_REVIEW' ? result.id : null;
   useEffect(() => {
     if (!pendingId) return undefined;
@@ -65,7 +57,8 @@ export default function FrauderConsole() {
         setResult((prev) => {
           if (!prev || prev.id !== fresh.id) return prev;
           if (prev.outcome_label !== fresh.outcome_label) {
-            toast(fresh.final_reason || fresh.outcome_label, fresh.status === 'COMPLETED' ? 'warning' : 'info', fresh.outcome_label);
+            toast(`Transaction ${fresh.outcome_label === 'SUCCESS' ? 'successful' : fresh.outcome_label.toLowerCase()}.`,
+                  fresh.outcome_label === 'SUCCESS' ? 'warning' : 'info', fresh.outcome_label);
             load();
           }
           const balances = Object.fromEntries(Object.entries(fresh.balances).map(([side, b]) => [side, { ...b, before: prev.balances?.[side]?.before ?? b.before }]));
@@ -79,25 +72,14 @@ export default function FrauderConsole() {
   if (!ctx) return <Loading />;
   const victim = ctx.victims.find((v) => String(v.id) === form.victim_id);
   const receiver = ctx.receivers.find((r) => String(r.id) === form.receiver_id);
-  const hint = guide.find((g) => g.code === form.scenario);
   const set = (k) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     setForm((f) => ({ ...f, [k]: value }));
   };
-  const ipState = !form.ip_address ? null : looksLikeIp(form.ip_address.trim());
-
-  const attackerFields = () => ({
-    victim_id: form.victim_id, city: form.city.trim(), target_location: form.target_location.trim(),
-    device_type: form.device_type.trim(), device_id: form.device_id.trim(), ip_address: form.ip_address.trim(),
-    scenario: form.scenario || null,
-  });
-
-  const missing = (forTransfer) => {
-    const need = [['victim_id', 'target user account'], ['city', 'target city'], ['ip_address', 'IP address']];
-    if (!(forTransfer && form.use_registered_device)) need.push(['device_type', 'device type'], ['device_id', 'device ID']);
-    if (forTransfer) need.push(['receiver_id', 'receiver account'], ['amount', 'transaction amount']);
-    if (forTransfer && form.use_clock) need.push(['demo_time', 'demo clock time']);
+  const missing = () => {
+    const need = [['victim_id', 'target user account'], ['receiver_id', 'receiver account'], ['amount', 'transaction amount']];
     const gaps = need.filter(([k]) => !String(form[k]).trim()).map(([, label]) => label);
+    if (!gaps.length && !(Number(form.amount) > 0)) gaps.push('an amount above ₹0');
     if (gaps.length) toast(`Please enter: ${gaps.join(', ')}.`, 'error', 'Missing details');
     return gaps.length > 0;
   };
@@ -114,31 +96,11 @@ export default function FrauderConsole() {
     }
   };
 
-  const attemptLogin = (outcome) => {
-    if (missing(false)) return;
-    run(outcome, async () => {
-      const res = await post('/frauder/login-attempt', { ...attackerFields(), outcome });
-      toast(res.message, res.data.success ? 'warning' : 'info');
-    });
-  };
-
-  const attemptOtp = () => {
-    if (!form.victim_id) { toast('Select the target user account first.', 'error'); return; }
-    run('otp', async () => {
-      const res = await post('/frauder/otp-attempt', { victim_id: form.victim_id, ip_address: form.ip_address.trim() });
-      toast(res.message, 'info');
-    });
-  };
-
   const submit = (e) => {
     e.preventDefault();
-    if (missing(true)) return;
+    if (missing()) return;
     run('transfer', async () => {
-      const body = {
-        ...attackerFields(), receiver_id: form.receiver_id, amount: form.amount,
-        use_registered_device: form.use_registered_device, demo_time: form.use_clock ? form.demo_time : null,
-      };
-      if (form.use_registered_device) { delete body.device_type; delete body.device_id; }
+      const body = { victim_id: form.victim_id, receiver_id: form.receiver_id, amount: form.amount, scenario: form.scenario || null };
       const res = await post('/frauder/transfer', body, { headers: { 'Idempotency-Key': keyRef.current } });
       keyRef.current = newKey();
       setResult(res.data);
@@ -163,37 +125,15 @@ export default function FrauderConsole() {
 
   return (
     <>
-      <PageHead title="Frauder console" subtitle="You type every attacker detail yourself. The 9 SQL rules score the attempt instantly: a low score goes through, a high score is blocked, and the review band waits for the account owner's YES or NO.">
+      <PageHead title="Frauder console" subtitle="Attempt a transfer from a target account. The 9 SQL fraud rules analyze it, and the outcome appears here: Success or Cancelled.">
+        <Link to="/frauder/records" className="btn btn-ghost">Fraud detection records</Link>
         <Link to="/frauder/history" className="btn btn-ghost">Attempt history</Link>
         <button className="btn btn-danger-soft" onClick={() => setConfirmReset(true)}>↺ Reset fraud attempts</button>
       </PageHead>
 
       <div className="notice notice-info">
-        🔒 Controlled impersonation of designated demo accounts only. You never see a password and cannot change balances,
-        profiles or rules. City, location, device and IP are <strong>simulated values you enter</strong> – they feed the fraud rules
-        but are never treated as a verified identity or location.
-      </div>
-
-      {/* Victims – information only */}
-      <h2 className="mt-24">Demo accounts you may target</h2>
-      <div className="grid grid-3 mt-8">
-        {ctx.victims.map((v) => (
-          <button key={v.id} type="button" onClick={() => setForm((f) => ({ ...f, victim_id: String(v.id) }))}
-                  className="card card-pad" style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit',
-                    borderColor: String(v.id) === form.victim_id ? 'var(--accent)' : undefined,
-                    background: String(v.id) === form.victim_id ? 'var(--accent-soft)' : undefined }}>
-            <div className="row-between">
-              <strong>{v.name}</strong>
-              {v.status === 'LOCKED' ? <span className="badge b-red">Locked</span> : <span className="badge b-green">Active</span>}
-            </div>
-            <div className="small muted">{v.upi_id} · home {v.home_city}{v.is_dormant_demo && ' · dormant demo'}</div>
-            <div className="stat-value" style={{ fontSize: 20 }}>{money(v.balance)}</div>
-            <div className="small muted">
-              {v.payments_90d} payment(s) in 90 days{v.average_90d != null && `, avg ${money(v.average_90d)}`} · idle {v.idle_days} d
-              {v.failed_login_count > 0 && ` · ${v.failed_login_count} failed login(s)`}
-            </div>
-          </button>
-        ))}
+        🔒 Controlled impersonation of designated accounts only. You never see a password and cannot change balances,
+        profiles or rules. Each attempt is made from the target account's own home city and registered device.
       </div>
 
       <div className="grid grid-main mt-24">
@@ -213,7 +153,11 @@ export default function FrauderConsole() {
               <Field label="Receiver account">
                 <select className="input" value={form.receiver_id} onChange={set('receiver_id')}>
                   <option value="">— Select a demo receiver —</option>
-                  {ctx.receivers.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.upi_id}{r.watchlisted ? ' ⚠ watch-listed' : ''}</option>)}
+                  {ctx.receivers.map((r) => (
+                    <option key={r.id} value={r.id} disabled={r.blocked}>
+                      {r.name} · {r.upi_id}{r.blocked ? ' ⛔ blocked' : r.watchlisted ? ' ⚠ flagged' : ''}
+                    </option>
+                  ))}
                 </select>
               </Field>
               <Field label="Transaction amount (₹)">
@@ -226,63 +170,14 @@ export default function FrauderConsole() {
                 </select>
               </Field>
             </div>
-            {hint && <div className="notice notice-warn small">💡 <span><strong>{hint.code}:</strong> {hint.hint}</span></div>}
-            {receiver?.watchlisted && <div className="small" style={{ color: 'var(--danger)' }}>⚠ {receiver.name} is on the watchlist.</div>}
-
-            <div className="sim-panel stack" style={{ gap: 12 }}>
-              <div className="row-between wrap">
-                <strong>Simulated attacker details</strong>
-                <span className="badge b-purple">SIMULATED – typed by you</span>
-              </div>
-              <div className="grid grid-2" style={{ gap: 12 }}>
-                <Field label="Target city" hint="Type or pick – used by R3 (impossible travel).">
-                  <input className="input" list="frauder-cities" value={form.city} onChange={set('city')} placeholder="e.g. Delhi" />
-                </Field>
-                <Field label="Target location" hint="Free text, shown to the account owner.">
-                  <input className="input" maxLength={120} value={form.target_location} onChange={set('target_location')} placeholder="e.g. Connaught Place" />
-                </Field>
-                <Field label="Device type">
-                  <input className="input" list="frauder-device-types" maxLength={60} value={form.device_type} onChange={set('device_type')}
-                         placeholder="e.g. Android phone" disabled={form.use_registered_device} />
-                </Field>
-                <Field label="Device ID" hint={victim?.attacker_devices.length ? `Used before on this account: ${victim.attacker_devices.map((d) => d.device_id).join(', ')}` : 'A new ID = an unknown device (R4, R9).'}>
-                  <input className="input mono" maxLength={40} value={form.device_id} onChange={set('device_id')}
-                         placeholder="e.g. ATK-PHONE-01" disabled={form.use_registered_device} />
-                </Field>
-                <Field label="IP address" hint={ipState === false ? '⚠ Not a valid IP address' : ipState ? '✓ Valid format' : 'IPv4 or IPv6, e.g. 49.36.12.8'}>
-                  <input className="input mono" value={form.ip_address} onChange={set('ip_address')} placeholder="e.g. 49.36.12.8"
-                         style={ipState === false ? { borderColor: 'var(--danger)' } : undefined} />
-                </Field>
-                <div className="stack" style={{ gap: 8, paddingTop: 22 }}>
-                  <label className="row small"><input type="checkbox" checked={form.use_registered_device} onChange={set('use_registered_device')} />
-                    Use the victim’s registered device (remote-access scam, transfers only)</label>
-                  <label className="row small"><input type="checkbox" checked={form.use_clock} onChange={set('use_clock')} /> Use demo clock (R5)</label>
-                  {form.use_clock && <input className="input input-sm" type="time" value={form.demo_time} onChange={set('demo_time')} />}
-                </div>
-              </div>
-              <datalist id="frauder-cities">{ctx.cities.map((c) => <option key={c} value={c} />)}</datalist>
-              <datalist id="frauder-device-types">{ctx.device_types.map((d) => <option key={d} value={d} />)}</datalist>
-            </div>
-
-            <div>
-              <div className="small muted" style={{ marginBottom: 6 }}>Login activity on the target account (uses the city, device and IP above):</div>
-              <div className="row wrap">
-                <button type="button" className="btn btn-ghost" disabled={!!busy} onClick={() => attemptLogin('WRONG_PASSWORD')}>✗ Wrong password</button>
-                <button type="button" className="btn btn-ghost" disabled={!!busy} onClick={() => attemptLogin('STOLEN_PASSWORD')}>🔑 Log in with stolen password</button>
-                <button type="button" className="btn btn-ghost" disabled={!!busy} onClick={attemptOtp}>Wrong OTP</button>
-              </div>
-            </div>
+            {receiver?.watchlisted && <div className="small" style={{ color: 'var(--danger)' }}>⚠ {receiver.name} is flagged on the watchlist.</div>}
 
             <button className="btn btn-danger btn-lg" disabled={!!busy}>
               {busy === 'transfer' ? 'Fraud engine checking…'
                 : `Attempt Transaction${form.amount ? ` · ${money(form.amount)}` : ''}${victim ? ` from ${victim.name.split(' ')[0]}’s account` : ''}`}
             </button>
             <p className="small muted">
-              {ctx.policy.auto_decisions
-                ? `Decided instantly by the risk score: below ${ctx.policy.review_floor} → approved, ${ctx.policy.block_floor} or more → blocked. Scores in between are held and the owner gets “Security Verification Required” – log in as them to answer YES or NO.`
-                : 'If any rule fires (whatever the score), no money moves: the owner gets “Security Verification Required” – log in as them to answer YES or NO.'}{' '}
-              Unanswered requests expire after {ctx.policy.confirmation_expiry_minutes} min ({ctx.policy.expiry_action === 'HOLD' ? 'sent to the fraud team' : ctx.policy.expiry_action === 'BLOCK' ? 'blocked' : 'expired, never authorized'}).
-              {ctx.policy.hard_block_rules.length > 0 && ` Absolute restrictions (blocked, a YES cannot authorize): ${ctx.policy.hard_block_rules.join(', ')}.`}
+              The attempt shows as Processing until it completes, then as Success (money transferred) or Cancelled (no money moved).
             </p>
           </div>
         </form>
@@ -290,7 +185,7 @@ export default function FrauderConsole() {
         <div className="card" ref={resultRef}>
           <div className="card-head">
             <h2>Fraud detection result</h2>
-            {pendingId && <span className="row small muted"><span className="live-dot" /> waiting for the owner</span>}
+            {pendingId && <span className="row small muted"><span className="live-dot" /> processing</span>}
           </div>
           <div className="card-body">
             {result ? <DetectionResult result={result} />
@@ -299,39 +194,22 @@ export default function FrauderConsole() {
         </div>
       </div>
 
-      {/* Rule guidance – text only */}
-      <h2 className="mt-24">Test the 9 Fraud Detection Rules</h2>
-      <p className="muted small mt-8">What to type for each rule, using the live thresholds. Nothing is filled in for you, and the backend still decides. One triggered rule is enough to hold the payment for the owner’s answer; combining rules raises the risk score.</p>
-      <div className="grid grid-3 mt-16">
-        {guide.map((g) => (
-          <div key={g.code} className="card scenario-card">
-            <div className="row-between">
-              <div className="row"><span className="rule-chip">{g.code}</span><strong>{g.title}</strong></div>
-              <span className="small muted">weight {g.weight}{!g.active && ' · disabled'}</span>
-            </div>
-            <p className="small">{g.hint}</p>
-            {g.hard_block && <span className="badge b-red" style={{ alignSelf: 'flex-start' }}>Absolute restriction – a YES cannot authorize</span>}
-          </div>
-        ))}
-      </div>
-
       {/* Recent attempts */}
       <div className="card mt-24">
         <div className="card-head"><h2>Recent fraud attempts</h2><Link to="/frauder/history" className="small">View all →</Link></div>
         {history.length === 0 ? <Empty title="No attempts yet" /> : (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Time</th><th>Victim</th><th>Action</th><th>Simulated details</th><th>Rules</th><th>Owner’s answer</th><th>Outcome</th></tr></thead>
+              <thead><tr><th>Time</th><th>Target</th><th>Action</th><th>City · IP</th><th>Risk factors</th><th>Outcome</th></tr></thead>
               <tbody>
                 {history.slice(0, 8).map((a, i) => (
                   <tr key={i} className={a.transaction_id ? 'clickable' : ''}
                       onClick={() => a.transaction_id && get(`/frauder/transactions/${a.transaction_id}`).then(setResult).then(() => resultRef.current?.scrollIntoView({ behavior: 'smooth' }))}>
                     <td className="small mono">{timeOnly(a.at)}</td>
                     <td className="small">{a.victim}</td>
-                    <td className="small"><strong>{a.summary}</strong>{a.scenario && <div className="muted">{a.scenario}</div>}</td>
+                    <td className="small"><strong>{a.summary}</strong></td>
                     <td className="small muted">{a.detail}</td>
                     <td>{a.rules ? <RuleChips rules={a.rules} /> : <span className="muted small">—</span>}</td>
-                    <td className="small">{a.confirmation ? (a.confirmation.response || (a.confirmation.status === 'EXPIRED' ? 'no answer' : 'waiting…')) : '—'}</td>
                     <td>{a.type === 'TRANSFER' ? <OutcomeBadge label={a.outcome_label} />
                       : <span className={`badge ${a.outcome === 'SUCCESS' ? 'b-amber' : 'b-slate'}`}>{a.outcome === 'SUCCESS' ? 'Logged in' : 'Failed'}</span>}</td>
                   </tr>
@@ -348,7 +226,7 @@ export default function FrauderConsole() {
           <button className="btn btn-danger" disabled={busy === 'reset'} onClick={reset}>Reset</button>
         </>}>
           <p>Every Frauder transfer is reversed (approved ones give the money back) and removed, together with the attacker logins, devices, OTP attempts, confirmations and alerts. Accounts locked by your attempts are unlocked.</p>
-          <p className="muted small mt-8">Genuine payments made by the User are kept. Your typed attack details stay in the form.</p>
+          <p className="muted small mt-8">Genuine payments made by the User are kept. Receiver accounts blocked because of your attempts are unblocked; blocks from genuine customer reports stay.</p>
         </Modal>
       )}
     </>

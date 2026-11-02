@@ -1,6 +1,5 @@
 // A stable per-browser device identifier. Shared across tabs (localStorage) so
-// the backend sees one browser as one device; Demo Mode can rotate it to
-// simulate logging in from a brand-new phone.
+// the backend sees one browser as one device.
 const DEVICE_KEY = 'fs_device_id';
 
 function randomId() {
@@ -18,16 +17,6 @@ export function deviceId() {
     return id;
   } catch {
     return 'no-storage-device';
-  }
-}
-
-export function rotateDeviceId() {
-  try {
-    const id = randomId();
-    localStorage.setItem(DEVICE_KEY, id);
-    return id;
-  } catch {
-    return null;
   }
 }
 

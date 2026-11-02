@@ -2,15 +2,16 @@
 presenter; nothing here runs on a timer or generates activity on its own."""
 from flask import g, request
 
-from portal.helpers import demo, frauder, payment_engine
+from portal.helpers import frauder, payment_engine
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import DETECTION, FRAUDER, role_required
 from portal.helpers.validators import json_body
 from . import bp
 
 OUTCOME_MESSAGES = {
-    'UNDER_REVIEW': 'USER CONFIRMATION PENDING: no money moved. The account owner has been asked to confirm '
-                    'whether they initiated this transaction.',
+    'UNDER_REVIEW': 'Transaction submitted and processing. No money has moved yet.',
+    'COMPLETED': 'Transaction successful.',
+    'CANCELLED': 'Transaction cancelled. No money moved.',
     'BLOCKED': 'Blocked: no money moved.',
 }
 
@@ -21,10 +22,10 @@ def context():
     return ok(frauder.context())
 
 
-@bp.get('/rule-guide')
+@bp.get('/records')
 @role_required(FRAUDER)
-def rule_guide():
-    return ok(frauder.rule_guide())
+def records():
+    return ok(frauder.records())
 
 
 @bp.get('/attempts')
@@ -75,6 +76,6 @@ def transaction(txn_id):
 def reset():
     if json_body().get('confirm') != 'RESET':
         raise ApiError('Send {"confirm": "RESET"} to reset the fraud attempts.', 422, 'CONFIRMATION_REQUIRED')
-    counts = demo.reset_simulation(actor=g.current_user)
+    counts = frauder.reset_attempts(actor=g.current_user)
     return ok({'cleared': counts}, 'Fraud attempts reset. Money moved by Frauder transfers was reversed; '
                                    'genuine payments are untouched.')

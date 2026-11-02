@@ -24,7 +24,7 @@ export default function FrauderHistory() {
                       onClick={() => a.transaction_id && get(`/frauder/transactions/${a.transaction_id}`).then(setOpen)}>
                     <td className="small nowrap">{dateTime(a.at)}</td>
                     <td className="small">{a.victim}</td>
-                    <td className="small"><strong>{a.summary}</strong>{a.txn_ref && <div className="mono muted">{a.txn_ref}</div>}{a.scenario && <div className="muted">{a.scenario}</div>}</td>
+                    <td className="small"><strong>{a.summary}</strong>{a.txn_ref && <div className="mono muted">{a.txn_ref}</div>}</td>
                     <td className="small muted">{a.detail}</td>
                     <td>{a.rules ? <RuleChips rules={a.rules} /> : <span className="muted small">—</span>}</td>
                     <td>{a.risk_score != null ? <RiskScore score={a.risk_score} /> : <span className="muted small">—</span>}</td>
@@ -32,7 +32,7 @@ export default function FrauderHistory() {
                       : <span className={`badge ${a.outcome === 'SUCCESS' ? 'b-amber' : 'b-slate'}`}>{a.type === 'OTP' ? 'Wrong OTP' : a.outcome === 'SUCCESS' ? 'Logged in' : 'Failed'}</span>}</td>
                     <td className="small">{a.type !== 'TRANSFER' ? '—' : a.money_moved
                       ? <span style={{ color: 'var(--warning)', fontWeight: 600 }}>Transferred</span>
-                      : <span style={{ color: 'var(--success)', fontWeight: 600 }}>Prevented / held</span>}</td>
+                      : <span className="muted">Not moved</span>}</td>
                   </tr>
                 ))}
               </tbody>

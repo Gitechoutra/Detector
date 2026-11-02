@@ -2,7 +2,7 @@
 portal/__init__.py
 ==================
 Application factory: config → logger → database/migrations → JWT → API
-handlers → routes → seed CLI.
+handlers → routes → seed CLI → dummy-account sync with .env.
 """
 import os
 
@@ -34,6 +34,9 @@ def create_app(config_class=Config):
 
     from portal.seeds import seed_command
     app.cli.add_command(seed_command)
+
+    from portal.seeders.seed_users import sync_on_startup
+    sync_on_startup(app)
 
     app.logger.info('FraudShield app initialised')
     return app

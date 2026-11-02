@@ -3,12 +3,12 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { dashboardHref } from './roles';
 import Layout from './components/Layout';
-import DemoMode from './pages/DemoMode';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Notifications from './pages/Notifications';
 import Register from './pages/Register';
 import Alerts from './pages/detection/Alerts';
+import DetectionEngine from './pages/detection/DetectionEngine';
 import DetectionOverview from './pages/detection/Overview';
 import Investigation from './pages/detection/Investigation';
 import Monitor from './pages/detection/Monitor';
@@ -17,6 +17,7 @@ import SecurityAudit from './pages/detection/SecurityAudit';
 import Watchlist from './pages/detection/Watchlist';
 import FrauderConsole from './pages/frauder/FrauderConsole';
 import FrauderHistory from './pages/frauder/FrauderHistory';
+import FraudRecords from './pages/frauder/FraudRecords';
 import IncomingPayments from './pages/receiver/IncomingPayments';
 import MyQR from './pages/receiver/MyQR';
 import SendMoney from './pages/user/SendMoney';
@@ -55,7 +56,6 @@ export default function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/demo" element={<DemoMode />} />
 
         <Route path="/user" element={<RequireRole role="USER" />}>
           <Route index element={<UserDashboard />} />
@@ -80,6 +80,7 @@ export default function App() {
         <Route path="/detection" element={<RequireRole role="DETECTION" />}>
           <Route index element={<DetectionOverview />} />
           <Route path="monitor" element={<Monitor />} />
+          <Route path="engine" element={<DetectionEngine />} />
           <Route path="transactions/:id" element={<Investigation />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="rules" element={<Rules />} />
@@ -90,6 +91,7 @@ export default function App() {
         <Route path="/frauder" element={<RequireRole role="FRAUDER" />}>
           <Route index element={<FrauderConsole />} />
           <Route path="history" element={<FrauderHistory />} />
+          <Route path="records" element={<FraudRecords />} />
         </Route>
 
         <Route path="*" element={<Home />} />

@@ -29,9 +29,3 @@ export const initials = (name = '') =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
 export const METHOD_LABEL = { UPI: 'UPI', QR: 'QR Code', BANK_TRANSFER: 'Bank Transfer' };
-
-export function todayISO(offsetDays = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toLocaleDateString('en-CA');
-}

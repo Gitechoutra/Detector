@@ -323,3 +323,16 @@ table.table { width: 100%; border-collapse: collapse; }
 /* Triggered rules on the "Security Verification Required" card */
 .rule-reasons { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13.5px; }
 .rule-reasons li { background: rgba(255, 255, 255, .7); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+
+/* OTP step after the owner answers YES */
+.otp-step { background: rgba(255, 255, 255, .75); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.input-otp { width: 190px; letter-spacing: .35em; font-size: 18px; text-align: center; }
+.input-otp::placeholder { letter-spacing: normal; font-size: 14px; }
+.demo-otp { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px;
+  background: #ECFDF5; border: 1px dashed #34D399; font-size: 14px; }
+.demo-otp strong { font-size: 17px; letter-spacing: .2em; }
+
+/* Simple tab bar (Fraud detection records) */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.tab { font: inherit; font-size: 14px; font-weight: 600; padding: 8px 14px; border: 0; background: none; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); }

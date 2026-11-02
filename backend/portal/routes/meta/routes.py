@@ -1,4 +1,3 @@
-from flask import current_app
 from sqlalchemy import text
 
 from portal.extensions import db
@@ -14,7 +13,7 @@ def health():
         db.session.execute(text('SELECT 1'))
     except Exception:
         return error('Database unavailable.', 503, 'DB_DOWN')
-    return ok({'status': 'ok', 'demo_mode': current_app.config['DEMO_MODE_ENABLED']})
+    return ok({'status': 'ok'})
 
 
 @bp.get('/meta/locations')

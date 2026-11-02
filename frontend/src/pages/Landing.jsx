@@ -20,18 +20,18 @@ const FEED = [
   { to: 'Metro Rail', amount: 120, method: 'QR', city: 'Bengaluru', rules: [], score: 0, outcome: 'ok' },
   { to: 'Rohan Traders', amount: 75000, method: 'Bank transfer', city: 'Kolkata', rules: ['R1', 'R4', 'R9'], score: 95, outcome: 'blocked' },
   { to: 'Priya Patel', amount: 4500, method: 'UPI', city: 'Delhi', rules: [], score: 0, outcome: 'ok' },
-  { to: 'Anil Kumar', amount: 49500, method: 'Bank transfer', city: 'Jaipur', rules: ['R7'], score: 15, outcome: 'ok' },
+  { to: 'Anil Kumar', amount: 49500, method: 'Bank transfer', city: 'Jaipur', rules: ['R7'], score: 15, outcome: 'held' },
   { to: 'City Pharmacy', amount: 840, method: 'QR', city: 'Pune', rules: [], score: 0, outcome: 'ok' },
   { to: 'Unknown merchant', amount: 32000, method: 'UPI', city: 'Delhi', rules: ['R3', 'R4'], score: 55, outcome: 'held' },
 ];
-const OUTCOME = { ok: 'Approved automatically', held: 'Held · owner confirms', blocked: 'Blocked automatically' };
+const OUTCOME = { ok: 'No risk · completed', held: 'Held · owner verifies', blocked: 'Owner said NO · blocked' };
 
 const STEPS = [
   ['send', 'User initiates a payment', 'By UPI ID, QR code or bank transfer, from their own dashboard.'],
   ['radar', 'Detection Engine analyzes it', 'All nine SQL rules run against the payment inside one database transaction.'],
   ['gauge', 'Risk score 0–100', 'The weights of every rule that fires are added up and capped at 100.'],
   ['inbox', 'The payee is credited', 'Approved payments land straight in the receiving customer’s account.'],
-  ['pause', 'Decided instantly by the score', 'Low scores are approved and high scores blocked in milliseconds; the middle band waits for the owner.'],
+  ['pause', 'Any risk factor → owner verifies', 'Whatever the score, a flagged payment waits: YES plus an OTP sends it, NO stops it and blocks the receiver.'],
   ['mask', 'Fraudster activity is monitored', 'Stolen logins, new devices and odd cities are recorded as evidence.'],
 ];
 
@@ -47,12 +47,12 @@ const FEATURES = [
 ];
 
 const ROLES = [
-  { key: 'USER', icon: 'user', tone: 'blue', who: 'The customer – sends and receives', demo: 'rahul@demo.bank',
+  { key: 'USER', icon: 'user', tone: 'blue', who: 'The customer – sends and receives',
     points: ['Send money by UPI, QR or bank transfer', 'Receive money with a UPI ID or QR code', 'Track payment status', 'Full sent and received history'] },
-  { key: 'DETECTION', icon: 'radar', tone: 'violet', who: 'The fraud team', demo: 'analyst@demo.bank',
+  { key: 'DETECTION', icon: 'radar', tone: 'violet', who: 'The fraud team',
     points: ['Monitor incoming transactions', 'Analyze SQL fraud rules', 'Calculate risk scores', 'Approve, hold or block payments'] },
-  { key: 'FRAUDER', icon: 'mask', tone: 'rose', who: 'The presenter playing the attacker', demo: 'frauder@demo.bank',
-    points: ['Access the fraudster demo dashboard', 'View simulated suspicious activity', 'Demonstrate fraud scenarios'] },
+  { key: 'FRAUDER', icon: 'mask', tone: 'rose', who: 'The presenter playing the attacker',
+    points: ['Access the fraudster console', 'View simulated suspicious activity', 'Demonstrate fraud scenarios'] },
 ];
 
 const SECURITY = [
@@ -293,9 +293,9 @@ export default function Landing() {
             ))}
           </ol>
           <div className="fx-outcomes reveal">
-            <div className="is-ok"><Icon name="check" size={18} /><div><strong>Score 0–39</strong><span>Approved instantly, receiver credited</span></div></div>
-            <div className="is-held"><Icon name="pause" size={18} /><div><strong>Score 40–69</strong><span>Held until the owner says YES or NO</span></div></div>
-            <div className="is-blocked"><Icon name="x" size={18} /><div><strong>Score 70–100</strong><span>Blocked instantly, no money moves</span></div></div>
+            <div className="is-ok"><Icon name="check" size={18} /><div><strong>No risk factor</strong><span>Completed at once, receiver credited</span></div></div>
+            <div className="is-held"><Icon name="pause" size={18} /><div><strong>Any risk factor, any score</strong><span>Held until the owner says YES and verifies an OTP</span></div></div>
+            <div className="is-blocked"><Icon name="x" size={18} /><div><strong>Owner says NO</strong><span>Stopped, no money moves, receiver blocked</span></div></div>
           </div>
         </div>
       </section>
@@ -369,7 +369,6 @@ export default function Landing() {
                     <span>{signedIn ? 'Open dashboard' : 'Sign in & open dashboard'}</span>
                     <Icon name="arrowRight" size={18} />
                   </div>
-                  {!signedIn && <small className="fx-role-demo">Demo: {r.demo}</small>}
                 </Link>
               );
             })}
@@ -400,7 +399,6 @@ export default function Landing() {
           <div>
             <a href="#home" className="fx-brand"><span className="fx-mark"><Icon name="shield" size={18} stroke={2.2} /></span>FraudShield <em>Bank</em></a>
             <p>SQL-based real-time fraud detection and transaction monitoring. A simulated bank: no real money, bank or UPI system is involved.</p>
-            <Link to="/demo" className="fx-footer-demo"><Icon name="sparkles" size={16} /> Viva / Demo Mode</Link>
           </div>
           <div>
             <h4>Navigate</h4>

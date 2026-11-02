@@ -9,7 +9,7 @@ import pytest
 from portal.extensions import db
 from portal.models import Transaction, User
 
-from .conftest import balance, login, send
+from .conftest import answer, balance, login, send
 
 # Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
 # the automatic policy is covered by test_auto_decisions.py.
@@ -116,7 +116,7 @@ def test_r6_watchlisted_receiver_names_the_entity(fr):
     assert rules(result) == {'R6'} and result['status'] == 'UNDER_REVIEW'
     r6 = next(t for t in result['rule_trace'] if t['code'] == 'R6')
     assert 'quickcash@fsbank' in r6['observed']
-    assert 'watchlist' in result['risk_explanation']
+    assert result['risk_explanation'] is None              # the Frauder does not see the approval step
 
 
 def test_r7_structuring_just_under_threshold(fr):
@@ -158,13 +158,12 @@ def test_held_attempt_moves_no_money_and_explains(app, fr):
     device = fr.login('STOLEN_PASSWORD', city='hyderabad')['device_id']
     result = fr.transfer(80000, receiver='quickcash', device=str(device))
     assert {'R4', 'R6', 'R9'} <= rules(result) and result['risk_score'] == 100 and result['status'] == 'UNDER_REVIEW'
-    assert result['outcome_label'] == 'USER CONFIRMATION PENDING'
-    assert result['risk_explanation'].startswith("Held for the account owner's authorization because")
-    assert 'unrecognized device' in result['risk_explanation']
+    assert result['outcome_label'] == 'PROCESSING' and result['confirmation'] is None
+    assert result['risk_explanation'] is None and result['final_reason'] is None   # no approval wording
     assert result['balances']['sender']['before'] == result['balances']['sender']['after'] == 250000
     labels = [i['label'] for i in result['timeline']]
     for step in ('Transaction submitted', 'Fraud rules evaluated', 'Rules triggered', 'Risk score calculated',
-                 'Risk band (recorded)', 'Security alert created', 'Waiting – no money moved yet'):
+                 'Risk band (recorded)', 'Security alert created', 'Processing – no money moved yet'):
         assert step in labels, step
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
     assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
@@ -176,7 +175,7 @@ def test_attempt_without_rules_still_needs_the_owner_then_moves_money(client, ap
     assert result['status'] == 'UNDER_REVIEW' and result['money_moved'] is False
     assert result['balances']['sender']['after'] == 250000
     rahul = login(client, 'rahul@demo.bank')
-    client.post(f"/api/transactions/{result['id']}/confirmation", headers=rahul, json={'response': 'YES'})
+    answer(client, rahul, result['id'], 'YES')
     assert balance(app, 'rahul@demo.bank') == Decimal('248500')
     assert balance(app, 'priya@demo.bank') == Decimal('26500')
 
@@ -185,7 +184,7 @@ def test_review_stays_pending_until_owner_verifies(client, app, fr):
     result = fr.transfer(2000, receiver='quickcash')
     assert result['status'] == 'UNDER_REVIEW'
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
-    assert result['confirmation']['status'] == 'PENDING'
+    assert result['confirmation'] is None and result['outcome_label'] == 'PROCESSING'   # Frauder side
     rahul = login(client, 'rahul@demo.bank')
     pending = client.get('/api/user/dashboard', headers=rahul).get_json()['data']['pending_confirmations']
     assert pending[0]['id'] == result['id'] and pending[0]['risk_explanation']
@@ -193,8 +192,7 @@ def test_review_stays_pending_until_owner_verifies(client, app, fr):
 
 def test_same_record_on_every_dashboard(client, fr):
     result = fr.transfer(1250)
-    client.post(f"/api/transactions/{result['id']}/confirmation", headers=login(client, 'rahul@demo.bank'),
-                json={'response': 'YES'})
+    answer(client, login(client, 'rahul@demo.bank'), result['id'], 'YES')
     rahul = client.get('/api/user/transactions', headers=login(client, 'rahul@demo.bank')).get_json()['data']['items']
     priya = client.get('/api/receiver/payments', headers=login(client, 'priya@demo.bank')).get_json()['data']['items']
     analyst = client.get('/api/detection/transactions', headers=login(client, 'analyst@demo.bank')).get_json()['data']['items']
@@ -278,15 +276,6 @@ def test_trace_covers_all_nine_rules(fr):
     result = fr.transfer(100)
     assert [t['code'] for t in result['rule_trace']] == [f'R{i}' for i in range(1, 10)]
     assert all(t['observed'] and t['threshold'] for t in result['rule_trace'])
-
-
-def test_rule_guide_uses_live_thresholds(client, fr):
-    analyst = login(client, 'analyst@demo.bank')
-    client.put('/api/detection/rules/R4', headers=analyst, json={'params': {'amount_threshold': 40000}})
-    guide = client.get('/api/frauder/rule-guide', headers=fr.headers).get_json()['data']
-    assert [g['code'] for g in guide] == [f'R{i}' for i in range(1, 10)]
-    r4 = next(g for g in guide if g['code'] == 'R4')
-    assert '₹40,000' in r4['hint'] and 'preset' not in r4      # hints never fill the form
 
 
 def test_automatic_simulation_is_gone(client, fr):

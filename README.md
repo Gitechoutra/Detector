@@ -8,9 +8,11 @@ weight to a risk score, `Risk = min(100, Σ weights)`. The score and its band (0
 |-----------|--------------|--------------|
 | No rule triggered (genuine payment by the owner) | SUCCESSFUL | Money moves immediately; the receiver is credited |
 | Any Frauder attempt, even with no rule triggered | USER_CONFIRMATION_PENDING | Never made by the owner, so always held for their YES/NO |
-| Any rule triggered (any score) | USER_CONFIRMATION_PENDING | Held, nothing debited; the owner gets "Security Verification Required" |
-| Owner answers YES | SUCCESSFUL | Re-validated (accounts, balance), then debited and credited |
-| Owner answers NO | BLOCKED | No money moves; HIGH alert |
+| Any rule triggered (any score – below 70 is not "safe", 70+ stays high risk) | USER_CONFIRMATION_PENDING | Held, nothing debited; the owner gets "Suspicious transaction detected. Did you initiate this transaction?" |
+| Owner answers YES | OTP_VERIFICATION_PENDING | An OTP goes to the owner's registered phone and e-mail; nothing moves yet |
+| Correct, unexpired OTP | SUCCESSFUL | Re-validated (accounts, balance), then debited and credited |
+| Wrong OTP 3 times | BLOCKED | No money moves; HIGH alert |
+| Owner answers NO | BLOCKED | No money moves; the **receiver account is flagged and blocked** in the database; HIGH alerts |
 | No answer in 30 min | EXPIRED | Never authorized; no money moves |
 
 All payments are simulated. Nothing connects to a real bank, UPI, SMS or payment system.
@@ -34,7 +36,7 @@ python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 copy .env.example .env          # macOS/Linux: cp .env.example .env  – then edit it
-flask db upgrade                # creates all tables + seeds roles, demo logins, rules, settings
+flask db upgrade                # every table, the dummy accounts (from .env), sample history, rules, settings
 python app.py                   # http://127.0.0.1:5000
 
 # 3. Frontend (new terminal)
@@ -43,7 +45,11 @@ npm install
 npm run dev                     # http://localhost:5173
 ```
 
-Open **http://localhost:5173**. Use **Open Demo Mode** on the login page for the guided viva demo.
+Open **http://localhost:5173** and sign in with one of the dummy accounts below.
+
+**After pulling new code:** run `pip install -r requirements.txt` and `flask db upgrade` again. The migrations
+are committed in `backend/migrations/versions/` (never autogenerate your own), so every developer's database
+ends up with the same tables, dummy accounts and sample data. Re-running `flask db upgrade` is always safe.
 
 ### `.env`
 
@@ -53,24 +59,34 @@ Open **http://localhost:5173**. Use **Open Demo Mode** on the login page for the
 | `SECRET_KEY`, `JWT_SECRET_KEY` | Long random strings: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `JWT_ACCESS_MINUTES` | Login session length (default 480) |
 | `CORS_ORIGINS` | Frontend origin(s) |
-| `DEMO_MODE_ENABLED` | `true` for the viva. It exposes demo credentials and the reset buttons without login, so set it to `false` anywhere else |
+| `SEED_<KEY>_EMAIL`, `SEED_<KEY>_PASSWORD` | Login of each dummy account (keys below). Defaults are in `.env.example` |
 
-No password or secret is written in the source code; everything comes from `.env`.
+No password or secret is written in the source code; everything comes from `.env` (missing `SEED_*` values fall
+back to `.env.example`).
 
 ---
 
-## 2. Demo credentials
+## 2. Dummy accounts
 
-| Role | Email | Password | Notes |
-|------|-------|----------|-------|
-| User | rahul@demo.bank | Rahul@123 | ₹2,50,000 · Mumbai · UPI `rahul@fsbank` |
-| User | karan@demo.bank | Karan@123 | ₹1,50,000 · Delhi |
-| Receiver | priya@demo.bank | Priya@123 | UPI `priya@fsbank` |
-| Receiver | amit@demo.bank | Amit@123 | UPI `amit@fsbank` |
-| Receiver (watch-listed) | quickcash@demo.bank | Quick@123 | Paying `quickcash@fsbank` fires R6 |
-| Detection System | analyst@demo.bank | Detect@123 | Fraud team dashboard |
-| Frauder | frauder@demo.bank | Fraud@123 | Manual attacker console |
-| User (dormant demo) | suresh@demo.bank | Suresh@123 | Designated dormant account for R8 |
+Created by `flask db upgrade` – there is no screen or API to create them. The emails and passwords below are the
+defaults from `.env.example`; set `SEED_<KEY>_EMAIL` / `SEED_<KEY>_PASSWORD` in `backend/.env` to change them.
+
+| Key | Role | Default email | Default password | Notes |
+|-----|------|---------------|------------------|-------|
+| `RAHUL` | User | rahul@demo.bank | Rahul@123 | ₹2,50,000 · Mumbai · UPI `rahul@fsbank` |
+| `KARAN` | User | karan@demo.bank | Karan@123 | ₹1,50,000 · Delhi |
+| `PRIYA` | User | priya@demo.bank | Priya@123 | UPI `priya@fsbank` |
+| `AMIT` | User | amit@demo.bank | Amit@123 | UPI `amit@fsbank` |
+| `QUICKCASH` | User (watch-listed) | quickcash@demo.bank | Quick@123 | Paying `quickcash@fsbank` fires R6 |
+| `SURESH` | User (dormant) | suresh@demo.bank | Suresh@123 | Designated dormant account for R8 |
+| `ANALYST` | Detection System | analyst@demo.bank | Detect@123 | Fraud team dashboard |
+| `FRAUDER` | Frauder | frauder@demo.bank | Fraud@123 | Manual attacker console |
+
+**Changing a login.** Edit `.env`, then restart the backend (or run `flask seed`). On every start the app
+compares each dummy account with `.env` and updates its email, password (stored hashed) and role. Accounts
+are matched by a fixed key (`users.seed_key`), so a new email renames the existing account – its balance and
+history stay, and no duplicate is created. If the new email already belongs to another account, the change
+is skipped and a warning is logged.
 
 Each **browser tab** keeps its own login (sessionStorage), so you can have two Users (one paying, one
 being paid) and Detection open side by side. Every customer sends and receives with one User login.
@@ -106,6 +122,16 @@ QR code.
 - **Alerts & cases:** assign, add notes, close as confirmed fraud or false positive.
 - **Rule console:** enable or disable rules, change weights, thresholds and score bands. Every change is audited.
 - **Watchlist**, plus **security events / login attempts / audit trail** with hash-chain verification.
+- **Detection Engine:** runs the nine SQL rules over the stored transactions of the dummy accounts – the
+  seeded sample history plus every payment made since – and shows what they find. You can choose one account
+  or all of them, a period, and whether to include Frauder attempts. It shows rule hits, risk bands, a
+  per-account summary and every flagged transaction with its reasons; each row opens the Investigation view.
+  - Each payment is evaluated at its own time inside a database savepoint that is rolled back, so a scan never
+    changes a payment, its status or its stored score.
+  - The run's results are saved in `detection_runs` and can be reopened.
+  - "Differs from stored result" counts payments whose rules or weights have changed since they were decided.
+  - R4 (device first use) and R8 (dormancy) read the account's current state, so for older payments they
+    show what the rule says today.
 
 **Frauder (manual attacker console).** There is no automatic or random fraud generation. The presenter plays
 the attacker by hand on designated demo victim accounts, and the SQL engine decides every outcome.
@@ -146,7 +172,7 @@ the attacker by hand on designated demo victim accounts, and the SQL engine deci
   - Approved attempts really debit and credit.
   - Blocked attempts move nothing.
   - Held attempts ask the owner for a confirmation (see below).
-- **Reset fraud attempts** (Frauder, Detection System or Demo Mode) reverses exactly the money Frauder
+- **Reset fraud attempts** (Frauder console) reverses exactly the money Frauder
   transfers moved and removes their records. Genuine payments are kept, and Suresh stays dormant.
 
 | Rule | What you do in the Frauder console (default thresholds) | Result on its own |
@@ -166,25 +192,40 @@ device, fires R4 + R6 + R9 (+ R1) = 100 → **Blocked**, with no money moved. At
 carry over: a burst of payments adds R2, and a change of city adds R3. Use **Reset fraud attempts** between
 rules to show each one on its own.
 
-**Account-owner authorization ("Security Verification Required").** Any payment on which at least one
-rule fires is held (`USER_CONFIRMATION_PENDING`) and its owner is asked to confirm it. This happens even
-if only one rule fires and the score is low, or if the score is 100.
+**Account-owner verification ("Suspicious transaction detected").** Any payment on which at least one of
+the nine risk factors fires is held (`USER_CONFIRMATION_PENDING`) and its owner is asked to verify it. This
+happens whatever the score: a low score is not treated as safe, and a score of 70+ is still recorded as high
+risk but held, not decided automatically. (The old `DECISION_MODE=AUTO` path is retired by migration 0010.)
 
-- **The notification:** it appears prominently on the User dashboard, on the Send money result, and in the
-  notification centre until it is answered or expires. It shows the amount, receiver, transaction ID, date
-  and time, device, IP and location, the triggered rules, the risk score and the reason.
-- **YES** (authorization, not a bypass): the server checks that the logged-in user owns the payment, that the
-  request is still pending and not expired, and records the answer and time. It then locks both accounts
-  and re-validates them: both accounts active, enough balance, and no absolute restriction. If everything
-  passes, the sender is debited and the receiver credited exactly once. The status becomes SUCCESSFUL
-  (**USER AUTHORIZED – PAYMENT SUCCESSFUL**) and both sides are notified. Message: *"Transaction
-  successfully authorized. The amount has been transferred to the Receiver."* If a check fails (for
-  example insufficient balance), it is BLOCKED with the reason, and no money moves.
-- **NO** (also blocks the attacker: their device and public IP are watch-listed, so the next attempt from them fires R6): BLOCKED immediately with reason *"Account owner denied initiating this transaction."* No money
-  moves. A HIGH `USER_DENIED` alert is raised, the attacker device is watch-listed, and the investigation
-  history is updated. The Frauder sees **USER DENIED – PAYMENT BLOCKED**. Message: *"Transaction blocked
-  successfully. You reported that this transaction was not initiated by you. No money has been
-  transferred."*
+- **The notification:** *"Suspicious transaction detected. Did you initiate this transaction?"* appears on
+  the User dashboard, on the Send money result, and in the notification centre until it is answered or
+  expires. It shows the amount, receiver, transaction ID, date and time, device, IP and location, the risk
+  factors with reasons, and the risk score.
+- **YES → OTP:**
+  - The server checks that the logged-in user owns the payment and that the request is still pending, then
+    records the answer and time.
+  - A 6-digit OTP is generated (only its hash is stored) and sent to the owner's registered phone and e-mail.
+    No SMS or e-mail gateway is configured, so delivery is simulated: the message appears in the owner's
+    notification centre, addressed to the masked contacts.
+  - The OTP is valid for `OTP_EXPIRY_MINUTES` (5). An expired OTP is rejected (410) and a new one can be sent
+    ("Resend OTP"), which voids the old one. A wrong OTP is rejected (422), and after `OTP_MAX_ATTEMPTS` (3)
+    wrong codes the payment is BLOCKED (**OTP FAILED – PAYMENT BLOCKED**).
+  - Only a correct, unexpired OTP authorizes the payment. The server then locks both accounts and
+    re-validates them: both active, receiver not blocked, enough balance, no absolute restriction. The sender
+    is debited and the receiver credited exactly once (**USER AUTHORIZED – PAYMENT SUCCESSFUL**).
+- **NO → stop and block the receiver:**
+  - The payment is BLOCKED with reason *"Account owner denied initiating this transaction."* No money moves.
+  - The receiver account is set to `BLOCKED` in `accounts.status`, so every payment to it (UPI, QR or bank
+    transfer, from anyone) is refused by the server with `RECEIVER_BLOCKED`. Payments already held for it
+    cannot be authorized either.
+  - The receiver's UPI ID and account number are flagged on the watchlist (R6 fires for them).
+  - A `receiver_blocks` record stores the reason, risk score, risk factors, a transaction snapshot and the
+    time.
+  - Alerts raised: HIGH `USER_DENIED` and `RECEIVER_BLOCKED`. The receiver is notified, and the attacker's
+    device and public IP are watch-listed.
+  - A blocked account can still send its own money; only receiving is blocked.
+  - A fraud analyst can lift a block (Detection → Watchlist → *Blocked receiver accounts*, reason required,
+    audited). The account becomes ACTIVE once no other block on it is active.
 - **Unchanged by the answer:** the risk score and triggered rules are kept exactly as first calculated.
 - **Safeguards:**
   - The answer is validated on the server. Only the logged-in owner can answer (anyone else gets 404; other
@@ -203,13 +244,19 @@ if only one rule fires and the score is low, or if the score is 100.
 - **APIs:**
   - `GET /api/transactions/confirmations`
   - `POST /api/transactions/<id>/confirmation {"response": "YES"|"NO"}`
+  - `POST /api/transactions/<id>/verification/confirm {"otp": "123456"}`
+  - `POST /api/transactions/<id>/verification/start` (resend the OTP)
   - `GET /api/detection/confirmations`
-- **OTP step-up:** the `verification/*` endpoints remain only for payments confirmed under the earlier OTP
-  flow.
+  - `GET /api/detection/receiver-blocks`
+  - `POST /api/detection/receiver-blocks/<id>/lift {"reason": "..."}`
+  - `GET /api/frauder/records`
 - **Dashboards:**
   - User: pending verifications with YES/NO, plus Successful, Blocked and Expired history.
   - Receiver: only credited payments.
-  - Frauder: the typed details, rules, score, the owner's answer and the final label.
+  - Frauder → **Fraud Records**: only records the application generated. That means flagged transactions
+    (seeded sample history excluded), flagged and blocked receiver accounts, transaction details, risk scores
+    and factors, the owner's YES/NO, OTP status and detection timestamps. The console no longer shows victim
+    profile cards, previously typed device IDs, rule hints or the typed attacker details.
   - Detection: "Suspicious transactions – owner confirmations" with rules, score, answer and final status.
   - All four use the same label (`outcome_label`). The plain status name is in `display_status`; the database
     still stores COMPLETED / UNDER_REVIEW.
@@ -260,19 +307,33 @@ index means a double-clicked submit creates one payment.
 
 ## 5. Database
 
-`flask db upgrade` runs three migrations in `backend/migrations/versions/`:
+`flask db upgrade` runs the migrations in `backend/migrations/versions/` (committed to git):
 
 1. **0001_create_schema**: 22 tables with primary keys, foreign keys, CHECK constraints and indexes.
    Each table is created only if missing.
-2. **0002_seed_master_data**: runs the seeders in `portal/seeders/`.
-   - inserts 4 roles, 12 cities, the demo logins, the simulation accounts, the 9 rules, the 3 risk bands,
-     11 scenarios, the watchlist seeds and the settings
-   - each row is inserted only if its natural key is absent, so it never duplicates rows or overwrites an
-     admin's changes
-   - inserts no transactions
-   - `flask seed` re-runs the same seeders on their own, e.g. to restore a deleted demo login
-3. **0003_views_and_audit_triggers**: `v_rule_performance` (per-rule hits/precision) and
-   `v_daily_transaction_summary` views, plus triggers that make `audit_logs` append-only.
+2. **0002_seed_master_data**: runs the seeders in `portal/seeders/` (roles, cities, dummy accounts, the 9
+   rules, the 3 risk bands, scenarios, watchlist, settings). Rows are inserted only if their natural key
+   is absent, so re-running never duplicates rows or overwrites an admin's changes.
+3. **0003_views_and_audit_triggers**: `v_rule_performance` and `v_daily_transaction_summary` views, plus
+   triggers that make `audit_logs` append-only.
+4. **0004–0008**: registration settings, Frauder console and owner-confirmation columns, the `EXPIRED` status.
+5. **0009_seed_accounts_engine**:
+   - `users.seed_key`, the stable key of each dummy account
+   - the retired `RECEIVER` role merged into `USER`
+   - the `detection_runs` table
+   - re-runs every seeder, so an older database gets missing settings, dummy accounts and the sample history
+6. **0010_receiver_blocks**: the `BLOCKED` account status, the `receiver_blocks` table, and `DECISION_MODE`
+   retired (every flagged payment is verified by its owner).
+7. **0011_notification_cleared**: `notifications.cleared_at` – "Mark all read" clears the list (rows are kept).
+8. **0012_revoked_tokens**: logout revokes the login token; every request rejects a revoked token.
+
+**Seeded sample history** (`seed_transactions.py`, references `SEED-0001`…`SEED-0024`):
+- Ordinary payments between the dummy accounts in the last two months.
+- Older patterns that trip R1, R2, R3, R5, R6 and R7, for the Detection Engine to find. These are older than
+  90 days, so they do not change the Frauder console's R1 averages.
+- It is the accounts' past, so it never changes a balance. Suresh is left dormant.
+
+`flask seed` re-runs every seeder on its own, e.g. to restore a deleted dummy login.
 
 Main tables:
 
@@ -305,7 +366,7 @@ cd backend
 pytest -q
 ```
 
-The 114 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
+The 160 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
 server, named automatically from `DATABASE_URL`. Delete it afterwards if you only want one database. They cover:
 - all four logins, account lockout and role-based access
 - every rule firing individually
@@ -316,7 +377,11 @@ server, named automatically from `DATABASE_URL`. Delete it afterwards if you onl
 - multiple rules, duplicates, expiry, insufficient balance, frozen receiver, unauthorized and Frauder responses
 - the legacy OTP step-up and analyst approve/reject
 - each of the nine rules triggered by hand through the Frauder console, with exact rules, score and decision; money moving only for approved attempts; repeated submissions, lockout, demo-clock handling, Frauder permissions and the scoped reset
-- Demo Mode and its resets; the automatic simulation endpoints are gone
+- dummy accounts: one per key, credentials synchronised from `.env` (email rename, password, role), no
+  duplicates, conflicts skipped; sample history seeded once without moving money
+- the Detection Engine: finds the seeded patterns, filters by account and period, never changes a
+  transaction, Detection role only
+- Demo Mode is gone (its endpoints return 404); the automatic simulation endpoints are gone
 - the audit hash chain and immutability
 - re-running migrations without duplicates or data loss
 
@@ -326,10 +391,12 @@ server, named automatically from `DATABASE_URL`. Delete it afterwards if you onl
 3. Rahul pays ₹10,000 to `quickcash@fsbank`: R6 (50), so it is USER CONFIRMATION PENDING. Not credited. An
    alert appears on the Detection dashboard within ~3 s.
 4. Rahul answers YES: QuickCash is credited. Repeat and answer NO: it is blocked.
-5. Demo Mode → *Simulate a new device*, log in as Rahul again, send ₹30,000: R4 + R9 = 65, so it is held
-   for Rahul's answer.
+5. Log in as Rahul from another browser or a private window (a new device) and send ₹30,000: R4 + R9 = 65,
+   so it is held for Rahul's answer.
 6. As the Frauder, follow “Test the 9 Fraud Detection Rules” and watch each attempt appear for Rahul and in the live monitor.
-7. Demo Mode → **Reset demo data** restores everything.
+7. As the Detection System, open **Detection Engine** and press **Run detection**: the seeded patterns and
+   today's payments are listed with their rules and scores.
+8. As the Frauder, **Reset fraud attempts** reverses everything the Frauder did.
 
 ---
 
@@ -341,7 +408,7 @@ backend/
   config/config.py    Config / TestConfig, read from .env
   docs/API.md         every endpoint
   logs/               app.log (rotating)
-  migrations/         Alembic env + versions 0001–0008
+  migrations/         Alembic env + versions 0001–0012 (committed – do not autogenerate)
   portal/
     __init__.py       create_app(): logger → db/migrate → JWT → api → routes → seed CLI
     extensions.py     db, migrate, jwt
@@ -350,19 +417,20 @@ backend/
     api/              CORS, JWT error responses, JSON error handlers
     helpers/          fraud_rules.py (9 SQL rules), fraud_engine.py (scoring), payment_engine.py
                       (pipeline, step-up, analyst decisions), auth.py, frauder.py (manual attacker console),
-                      analytics.py, demo.py, audit.py (hash chain), security.py (JWT + RBAC),
+                      analytics.py, detection_engine.py, audit.py (hash chain), security.py (JWT + RBAC),
                       validators.py, responses.py, helpers.py (settings, notifications, alerts)
     models/           one module per table + utils.py
     routes/           one package per feature: <feature>/__init__.py creates the Blueprint,
                       <feature>/routes.py adds the views. authentication, users, receivers,
                       transactions, detection, alerts, notifications, analytics, security,
-                      frauder, demo, meta
-    seeders/          seed_roles, seed_locations, seed_users, seed_fraud_rules,
-                      seed_risk_categories, seed_scenarios, seed_watchlist, seed_settings
+                      frauder, meta
+    seeders/          seed_roles, seed_locations, seed_users (dummy accounts + .env sync),
+                      seed_fraud_rules, seed_risk_categories, seed_scenarios, seed_watchlist,
+                      seed_settings, seed_transactions (sample history)
   tests/              pytest suite
   requirements.txt  .env.example
 frontend/
-  src/pages/      Login, DemoMode, user/, receiver/, detection/, frauder/
+  src/pages/      Landing, Login, Register, user/, receiver/, detection/ (incl. DetectionEngine), frauder/
   src/components/ Layout, tables, modals, badges
   src/api/client.js  src/styles.css
 ```
@@ -370,3 +438,11 @@ frontend/
 **Notes and limits**
 - Device identity is a per-browser ID in localStorage, and location is chosen from a list (both simulated).
 - The simulated OTP is shown in-app as an "SMS". No SMS is sent.
+- **Before a real deployment:**
+  - Remove the on-screen demo OTP: the `demo_otp` field in `routes/transactions/routes.py` and the "Demo OTP" box
+    in `SecurityConfirmation.jsx`.
+  - Connect a real SMS/e-mail gateway in `payment_engine._issue_otp`.
+  - Serve the API with a production WSGI server (e.g. `waitress-serve --port=5000 app:app` on Windows, or
+    gunicorn on Linux). `python app.py` is Flask's development server.
+  - Serve `frontend/dist` (from `npm run build`) as static files.
+  - Set strong `SECRET_KEY`/`JWT_SECRET_KEY` and change every `SEED_*_PASSWORD` in `.env`.

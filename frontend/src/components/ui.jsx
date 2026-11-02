@@ -36,7 +36,7 @@ export function OutcomeBadge({ label }) {
   if (!label) return null;
   const cls = label.includes('SUCCESSFUL') ? 'b-green'
     : label.includes('BLOCKED') || label === 'DECLINED' ? 'b-red'
-      : label === 'CANCELLED' || label.startsWith('EXPIRED') ? 'b-slate' : 'b-amber';
+      : label.includes('CANCELLED') || label.startsWith('EXPIRED') ? 'b-slate' : 'b-amber';
   return <span className={`badge badge-dot ${cls}`}>{label}</span>;
 }
 

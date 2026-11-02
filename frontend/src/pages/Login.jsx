@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { errorMessage, get, post } from '../api/client';
+import { errorMessage, get } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import AuthShell from '../components/AuthShell';
 import Icon from '../components/Icon';
@@ -23,10 +23,6 @@ export default function Login() {
   const [locations, setLocations] = useState([]);
   const [error, setError] = useState(params.get('expired') ? 'Your session ended. Please log in again.' : '');
   const [busy, setBusy] = useState(false);
-  const [demoBusy, setDemoBusy] = useState(false);
-  // Demo account hit the failed-login lockout: offer to lift it (demo accounts only).
-  const [lockedDemo, setLockedDemo] = useState('');
-  const autoTried = useRef(false);
 
   useEffect(() => {
     get('/meta/locations').then(setLocations).catch(() => {});
@@ -42,31 +38,17 @@ export default function Login() {
     navigate(wanted, { replace: true });
   };
 
-  const submit = async (e, creds) => {
-    e?.preventDefault();
+  const submit = async (e) => {
+    e.preventDefault();
     setBusy(true);
     setError('');
-    setLockedDemo('');
-    const loginEmail = (creds?.email ?? email).trim().toLowerCase();
     try {
-      const s = await login(loginEmail, creds?.password ?? password, creds ? null : locationId);
+      const s = await login(email.trim().toLowerCase(), password, locationId);
       goAfterLogin(s);
     } catch (err) {
       setError(errorMessage(err));
-      if (err.response?.data?.error?.code === 'ACCOUNT_LOCKED' && loginEmail.endsWith('@demo.bank')) setLockedDemo(loginEmail);
     } finally {
       setBusy(false);
-    }
-  };
-
-  const unlockDemo = async () => {
-    try {
-      const res = await post('/demo/unlock', { email: lockedDemo });
-      setLockedDemo('');
-      setError('');
-      toast(res.message, 'success', 'Account unlocked');
-    } catch (err) {
-      setError(errorMessage(err));
     }
   };
 
@@ -78,41 +60,6 @@ export default function Login() {
     setParams(p, { replace: true });
     setError('');
   };
-
-  const demoLogin = async () => {
-    setDemoBusy(true);
-    setError('');
-    try {
-      const info = await get('/demo/info');
-      const cred = info.credentials.find((c) => c.role === role);
-      if (!cred) throw new Error(`No demo login is set up for ${ROLE_INFO[role].label}.`);
-      setEmail(cred.email);
-      setPassword(cred.password);
-      await submit(null, cred);
-    } catch (err) {
-      setError(err.response ? errorMessage(err) : err.message);
-    } finally {
-      setDemoBusy(false);
-    }
-  };
-
-  // Demo Mode opens /login?as=<email> in a new tab and logs that role in.
-  useEffect(() => {
-    const as = params.get('as');
-    if (!as || autoTried.current) return;
-    autoTried.current = true;
-    get('/demo/info')
-      .then((info) => {
-        const cred = info.credentials.find((c) => c.email === as);
-        if (cred) {
-          setEmail(cred.email);
-          setPassword(cred.password);
-          submit(null, cred);
-        }
-      })
-      .catch((err) => setError(errorMessage(err)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
 
   const roleLabel = role && ROLE_INFO[role].label;
   const signedInElsewhere = session && role && session.user.role !== role;
@@ -144,19 +91,10 @@ export default function Login() {
           </div>
         )}
 
-        {role && (
-          <>
-            <button type="button" className="au-demo-btn mt-16" onClick={demoLogin} disabled={busy || demoBusy}>
-              <Icon name="sparkles" size={16} /> {demoBusy ? 'Signing in…' : `One-click demo login as ${roleLabel}`}
-            </button>
-            <div className="au-or mt-16">or use your own account</div>
-          </>
-        )}
-
         <form className="form-grid mt-16" onSubmit={submit}>
           <Field label="Email">
             <input className="input" type="email" autoComplete="username" value={email}
-                   onChange={(e) => setEmail(e.target.value)} required placeholder="rahul@demo.bank" />
+                   onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" />
           </Field>
           <Field label="Password">
             <input className="input" type="password" autoComplete="current-password" value={password}
@@ -168,30 +106,13 @@ export default function Login() {
               {locations.map((l) => <option key={l.id} value={l.id}>{l.city}</option>)}
             </select>
           </Field>
-          {error && (
-            <div className="notice notice-danger">
-              ⚠ {error}
-              {lockedDemo && (
-                <div className="mt-8">
-                  This is a demo account, so you can unlock it now.{' '}
-                  <button type="button" className="link-btn" onClick={unlockDemo}>Unlock {lockedDemo}</button>
-                </div>
-              )}
-            </div>
-          )}
+          {error && <div className="notice notice-danger">⚠ {error}</div>}
           <button className="btn btn-glow btn-lg btn-block" disabled={busy}>
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
       </div>
 
-      <div className="au-panel">
-        <div>
-          <strong>🎓 Viva / Demo Mode</strong>
-          <div className="small">Guided demo, sample logins and one-click fraud scenarios.</div>
-        </div>
-        <Link to="/demo" className="btn">Open Demo →</Link>
-      </div>
       <p className="au-link">New customer? <Link to="/register">Create an account</Link></p>
       {session && !signedInElsewhere && (
         <p className="au-link">Already signed in as {session.user.full_name}. <Link to={session.dashboard}>Go to dashboard →</Link></p>

@@ -27,6 +27,15 @@ def init_app(app):
     def _expired(header, payload):
         return error('Your session has expired. Please log in again.', 401, 'TOKEN_EXPIRED')
 
+    @jwt.token_in_blocklist_loader
+    def _revoked(header, payload):
+        from portal.models import RevokedToken
+        return db.session.get(RevokedToken, payload['jti']) is not None
+
+    @jwt.revoked_token_loader
+    def _logged_out(header, payload):
+        return error('You have logged out. Please log in again.', 401, 'TOKEN_REVOKED')
+
     @app.errorhandler(404)
     def _not_found(e):
         return error('Resource not found.', 404, 'NOT_FOUND')

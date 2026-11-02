@@ -6,7 +6,7 @@ from portal.extensions import db
 from portal.models import Account, Alert, Notification, SystemSetting, Transaction, User
 from portal.helpers import payment_engine
 
-from .conftest import balance, login, send
+from .conftest import answer, balance, login, send
 
 # Written for the owner-confirmation policy (DECISION_MODE=OWNER_CONFIRM);
 # the automatic policy is covered by test_auto_decisions.py.
@@ -109,8 +109,7 @@ def test_qr_and_bank_transfer_methods(client, app):
     assert balance(app, 'priya@demo.bank') == Decimal('25550')
 
 
-def _answer(client, headers, txn_id, response):
-    return client.post(f'/api/transactions/{txn_id}/confirmation', headers=headers, json={'response': response})
+_answer = answer      # YES is followed by the OTP that was sent
 
 
 def _hand_to_analyst(app, client, headers, txn_id):
@@ -135,7 +134,8 @@ def test_yes_authorizes_a_held_payment_whatever_the_score(client, app):
     res = _answer(client, headers, data['id'], 'YES')
     body = res.get_json()
     assert res.status_code == 200 and body['data']['outcome'] == 'authorized'
-    assert body['message'] == 'Transaction successfully authorized. The amount has been transferred to the Receiver.'
+    assert body['message'] == ('OTP verified. Transaction successfully authorized and the amount has been '
+                               'transferred to the Receiver.')
     txn = body['data']['transaction']
     assert txn['display_status'] == 'SUCCESSFUL' and txn['outcome_label'] == 'USER AUTHORIZED – PAYMENT SUCCESSFUL'
     assert txn['risk_score'] == 65 and {r['code'] for r in txn['rules']} == {'R4', 'R9'}   # kept for investigation
@@ -202,8 +202,8 @@ def test_high_score_still_waits_for_the_owner(client, app):
     assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
 
 
-def test_wrong_otp_three_times_declines_legacy_step_up(client, app):
-    """The OTP flow is kept for payments confirmed under the earlier workflow."""
+def test_resent_otp_wrong_three_times_blocks(client, app):
+    """After YES a new OTP can be requested; three wrong codes block the payment."""
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
     with app.app_context():
@@ -218,7 +218,7 @@ def test_wrong_otp_three_times_declines_legacy_step_up(client, app):
         codes.append(res.get_json()['error']['code'])
     assert codes == ['VERIFICATION_INCORRECT', 'VERIFICATION_INCORRECT', 'VERIFICATION_FAILED']
     with app.app_context():
-        assert db.session.get(Transaction, data['id']).status == 'DECLINED'
+        assert db.session.get(Transaction, data['id']).status == 'BLOCKED'
         db.session.remove()
     assert balance(app, 'rahul@demo.bank') == Decimal('250000')
 

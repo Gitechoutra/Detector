@@ -1,6 +1,6 @@
 from functools import wraps
 
-from flask import current_app, g, request
+from flask import g, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request
 
 from portal.extensions import db
@@ -32,19 +32,6 @@ def role_required(*roles):
                 return e.response()
         return wrapper
     return decorator
-
-
-def demo_mode_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not current_app.config.get('DEMO_MODE_ENABLED'):
-            return error('Demo Mode is disabled on this server.', 403, 'DEMO_DISABLED')
-        try:
-            return fn(*args, **kwargs)
-        except ApiError as e:
-            db.session.rollback()
-            return e.response()
-    return wrapper
 
 
 def client_ip():

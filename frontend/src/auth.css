@@ -55,23 +55,7 @@
 .au-roles .r-RECEIVER { --tone: #059669; }
 .au-roles .r-DETECTION { --tone: #7C3AED; }
 .au-roles .r-FRAUDER { --tone: #E11D48; }
-.au-demo-btn {
-  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px; border-radius: 12px; cursor: pointer;
-  font: inherit; font-weight: 600; font-size: 14px; color: #4338CA; background: #EEF2FF; border: 1px dashed #A5B4FC; transition: background .2s;
-}
-.au-demo-btn:hover:not(:disabled) { background: #E0E7FF; }
-.au-demo-btn:disabled { opacity: .6; cursor: wait; }
-.au-or { display: flex; align-items: center; gap: 12px; color: #94A3B8; font-size: 12px; }
-.au-or::before, .au-or::after { content: ''; flex: 1; height: 1px; background: #E5E8F0; }
 
-.au-panel {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 16px;
-  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-}
-.au-panel strong { color: #fff; }
-.au-panel .small { color: #A9B3C9; }
-.au-panel .btn { background: #fff; color: #4338CA; font-weight: 600; flex-shrink: 0; }
-.au-panel .btn:hover { background: #EEF2FF; text-decoration: none; }
 .au-link { text-align: center; font-size: 14px; color: #A9B3C9; }
 .au-link a { color: #A5B4FC; font-weight: 600; }
 
@@ -79,7 +63,6 @@
 @media (max-width: 520px) {
   .au-top { padding: 16px; }
   .au-card { padding: 22px 18px; }
-  .au-panel { flex-direction: column; align-items: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   .au *, .au *::before, .au *::after { animation: none !important; transition: none !important; }

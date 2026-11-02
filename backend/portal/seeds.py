@@ -1,8 +1,9 @@
 """
 portal/seeds.py
 ===============
-`flask seed`: re-run the master-data seeders without touching migrations,
-e.g. after someone deleted a demo login. Safe to run any number of times.
+`flask seed`: re-run the seeders without touching migrations, e.g. after
+someone deleted a dummy login, and synchronise the dummy accounts with .env.
+Safe to run any number of times.
 """
 import click
 from flask.cli import with_appcontext

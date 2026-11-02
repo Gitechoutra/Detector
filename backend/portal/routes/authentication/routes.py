@@ -1,4 +1,7 @@
+from datetime import datetime
+
 from flask import g
+from flask_jwt_extended import get_jwt
 
 from portal.helpers import auth
 from portal.helpers.audit import write_audit
@@ -6,6 +9,7 @@ from portal.extensions import db
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import client_ip, role_required
 from portal.helpers.validators import json_body, require_str
+from portal.models import RevokedToken, now
 from . import bp
 
 
@@ -54,6 +58,12 @@ def me():
 @bp.post('/logout')
 @role_required()
 def logout():
+    """Ends this session: the token is revoked, so it no longer works even before it expires."""
+    claims = get_jwt()
+    RevokedToken.query.filter(RevokedToken.expires_at < now()).delete(synchronize_session=False)
+    if db.session.get(RevokedToken, claims['jti']) is None:
+        db.session.add(RevokedToken(jti=claims['jti'], user_id=g.current_user.id,
+                                    expires_at=datetime.fromtimestamp(claims['exp'])))
     write_audit('LOGOUT', 'user', g.current_user.id, {}, actor=g.current_user, ip=client_ip())
     db.session.commit()
     return ok(message='Logged out.')

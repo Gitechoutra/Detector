@@ -67,7 +67,20 @@ class Transaction(db.Model):
             return None
         return {'status': self.confirmation_status, 'response': self.confirmation_response,
                 'responded_at': iso(self.confirmation_responded_at),
-                'expires_at': iso(self.confirmation_expires_at)}
+                'expires_at': iso(self.confirmation_expires_at), 'otp': self.otp_dict()}
+
+    def otp_dict(self):
+        """The OTP sent after YES: NOT_SENT / SENT / VERIFIED / FAILED / EXPIRED."""
+        from portal.models.verification_challenges import VerificationChallenge
+        latest = (VerificationChallenge.query.filter_by(transaction_id=self.id)
+                  .order_by(VerificationChallenge.id.desc()).first())
+        if latest is None:
+            return {'status': 'NOT_SENT', 'attempts': 0}
+        status = {'PENDING': 'SENT'}.get(latest.status, latest.status)
+        if status == 'SENT' and latest.expires_at < now():
+            status = 'EXPIRED'
+        return {'status': status, 'attempts': latest.attempts, 'max_attempts': latest.max_attempts,
+                'expires_at': iso(latest.expires_at), 'verified_at': iso(latest.verified_at)}
 
     def outcome_label(self):
         """One label shared by the User, Receiver, Frauder and Detection screens."""
@@ -77,18 +90,28 @@ class Transaction(db.Model):
         if status == 'BLOCKED':
             if response == 'NO':
                 return 'USER DENIED – PAYMENT BLOCKED'
+            if self.confirmation_status == 'OTP_FAILED':
+                return 'OTP FAILED – PAYMENT BLOCKED'
             if self.confirmation_status == 'EXPIRED':
                 return 'NO RESPONSE – BLOCKED'
             if response == 'YES':
                 return 'USER AUTHORIZED – STILL BLOCKED'
             return 'BLOCKED'
+        if status == 'CANCELLED' and response == 'NO':
+            return 'USER DENIED – CANCELLED'
         if status == 'EXPIRED':
             return 'EXPIRED – NOT AUTHORIZED'
         if status == 'UNDER_REVIEW':
             if self.review_stage == 'AWAITING_ANALYST':
                 return 'WITH FRAUD TEAM'
-            return 'USER AUTHORIZED – VERIFYING' if response == 'YES' else 'USER CONFIRMATION PENDING'
+            return 'USER SAID YES – OTP PENDING' if response == 'YES' else 'USER CONFIRMATION PENDING'
         return status
+
+    def frauder_label(self):
+        """The outcome as the Frauder portal shows it: no approval/waiting states,
+        just Processing until the owner acts, then Success or Cancelled."""
+        return {'COMPLETED': 'SUCCESS', 'CANCELLED': 'CANCELLED', 'UNDER_REVIEW': 'PROCESSING',
+                'PROCESSING': 'PROCESSING'}.get(self.status, self.status)
 
     def display_status(self):
         """The status names shown to people. COMPLETED / UNDER_REVIEW stay the stored values."""
@@ -96,6 +119,8 @@ class Transaction(db.Model):
             return 'SUCCESSFUL'
         if self.status == 'UNDER_REVIEW' and self.confirmation_status == 'PENDING':
             return 'USER_CONFIRMATION_PENDING'
+        if self.status == 'UNDER_REVIEW' and self.confirmation_status == 'CONFIRMED':
+            return 'OTP_VERIFICATION_PENDING'
         return self.status
 
     def to_dict(self, view='detection'):

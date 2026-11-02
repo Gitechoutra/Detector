@@ -24,6 +24,13 @@ export default function UserDashboard() {
 
       <SecurityConfirmation items={confirmations} onChange={() => reload(true)} />
 
+      {account.status === 'BLOCKED' && (
+        <div className="notice notice-danger" style={{ marginBottom: 16 }}>
+          <strong>⛔ Your account is blocked from receiving payments.</strong> A payment to you was reported as not
+          initiated by the payer's account owner. You can still send money; our fraud team will review the block.
+        </div>
+      )}
+
       <div className="grid grid-main">
         <div className="card card-pad balance-card">
           <div className="muted small">Available balance</div>

@@ -13,7 +13,7 @@ from config.config import TestConfig
 from portal.extensions import db
 from portal.models import Account, SystemSetting, User
 from portal.seeders.seed_settings import SETTINGS
-from portal.helpers import demo
+from tests.data_reset import reset_data
 
 
 @pytest.fixture(scope='session')
@@ -35,7 +35,7 @@ def app():
 @pytest.fixture(autouse=True)
 def fresh_data(app):
     with app.app_context():
-        demo.reset()
+        reset_data()
         for key, value, _ in SETTINGS:          # tests may change the confirmation policy
             db.session.get(SystemSetting, key).setting_value = value
         db.session.commit()
@@ -47,7 +47,7 @@ def fresh_data(app):
 
 @pytest.fixture
 def owner_confirm(app):
-    """The pre-AUTO policy: any triggered rule is held for the owner's YES/NO."""
+    """Kept for older tests: every triggered rule is now always held for the owner."""
     with app.app_context():
         db.session.get(SystemSetting, 'DECISION_MODE').setting_value = 'OWNER_CONFIRM'
         db.session.commit()
@@ -97,3 +97,20 @@ def balance(app, email):
         value = Account.query.filter_by(user_id=user.id).first().balance
         db.session.remove()
         return Decimal(value)
+
+
+def otp_from(response):
+    """The 6-digit OTP from a YES / resend response (delivery is simulated)."""
+    data = response.get_json()['data']
+    sms = (data.get('otp') or data)['simulated_sms']
+    return sms.split('OTP ')[1][:6]
+
+
+def answer(client, headers, txn_id, response):
+    """The owner's answer. YES is followed by the OTP that was sent, so the result
+    is the authorization; any other answer (or a refused YES) is returned as is."""
+    res = client.post(f'/api/transactions/{txn_id}/confirmation', headers=headers, json={'response': response})
+    if str(response).upper() != 'YES' or res.status_code != 200:
+        return res
+    return client.post(f'/api/transactions/{txn_id}/verification/confirm', headers=headers,
+                       json={'otp': otp_from(res)})

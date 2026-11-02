@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from portal.extensions import db
 from portal.models import Account, Device, FraudRule, Location, User, now
-from portal.helpers.payment_engine import respond_to_confirmation, send_money
+from portal.helpers.payment_engine import confirm_verification, respond_to_confirmation, send_money
 
 from .conftest import login, send
 
@@ -104,7 +104,9 @@ def test_r8_dormant_reactivation(ctx):
     first = _pay('rahul@demo.bank', 30000, device=dev)
     assert 'R8' in _codes(first) and first.status == 'UNDER_REVIEW'
     # Once the owner authorizes it, the completed payment reactivates the account.
-    respond_to_confirmation(User.query.filter_by(email='rahul@demo.bank').first(), first.id, 'YES')
+    owner = User.query.filter_by(email='rahul@demo.bank').first()
+    sms = respond_to_confirmation(owner, first.id, 'YES')['otp']['simulated_sms']
+    confirm_verification(owner, first.id, sms.split('OTP ')[1][:6])
     assert 'R8' not in _codes(_pay('rahul@demo.bank', 30000, device=dev))
 
 
