@@ -42,6 +42,8 @@ The script:
 - runs `npm ci` for the frontend.
 
 Re-running it is safe: nothing is deleted, and seed rows are only inserted when missing.
+For a non-interactive setup (CI, scripted machines), set `SETUP_DB_HOST`, `SETUP_DB_PORT`, `SETUP_DB_USER`,
+`SETUP_DB_PASSWORD` and `SETUP_DB_NAME` before running the script; it then asks nothing.
 
 Then start the app in two terminals:
 

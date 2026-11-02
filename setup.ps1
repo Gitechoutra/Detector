@@ -28,12 +28,21 @@ $envFile = Join-Path $backend '.env'
 if (Test-Path $envFile) {
     Write-Host 'backend\.env already exists - left unchanged.'
 } else {
-    $dbHost = Read-Host 'MySQL host [localhost]'; if (-not $dbHost) { $dbHost = 'localhost' }
-    $dbPort = Read-Host 'MySQL port [3306]'; if (-not $dbPort) { $dbPort = '3306' }
-    $dbUser = Read-Host 'MySQL user [root]'; if (-not $dbUser) { $dbUser = 'root' }
-    $secure = Read-Host 'MySQL password' -AsSecureString
-    $dbPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-    $dbName = Read-Host 'Database name [bank]'; if (-not $dbName) { $dbName = 'bank' }
+    # Non-interactive use (CI, scripted setups): set SETUP_DB_HOST/PORT/USER/PASSWORD/NAME first.
+    function Ask($var, $prompt, $default) {
+        $value = [Environment]::GetEnvironmentVariable($var)
+        if ($null -eq $value) { $value = Read-Host "$prompt [$default]" }
+        if ($value) { $value } else { $default }
+    }
+    $dbHost = Ask 'SETUP_DB_HOST' 'MySQL host' 'localhost'
+    $dbPort = Ask 'SETUP_DB_PORT' 'MySQL port' '3306'
+    $dbUser = Ask 'SETUP_DB_USER' 'MySQL user' 'root'
+    $dbPass = $env:SETUP_DB_PASSWORD
+    if ($null -eq $dbPass) {
+        $secure = Read-Host 'MySQL password' -AsSecureString
+        $dbPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    }
+    $dbName = Ask 'SETUP_DB_NAME' 'Database name' 'bank'
     $encoded = [Uri]::EscapeDataString($dbPass)
     $content = Get-Content (Join-Path $backend '.env.example') -Raw
     $content = $content -replace '(?m)^DATABASE_URL=.*$', "DATABASE_URL=mysql+pymysql://${dbUser}:${encoded}@${dbHost}:${dbPort}/${dbName}?charset=utf8mb4"

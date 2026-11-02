@@ -25,11 +25,14 @@ step 'Backend: configuration (backend/.env)'
 if [ -f "$BACKEND/.env" ]; then
   echo 'backend/.env already exists - left unchanged.'
 else
-  read -r -p 'MySQL host [localhost]: ' DB_HOST; DB_HOST=${DB_HOST:-localhost}
-  read -r -p 'MySQL port [3306]: ' DB_PORT; DB_PORT=${DB_PORT:-3306}
-  read -r -p 'MySQL user [root]: ' DB_USER; DB_USER=${DB_USER:-root}
-  read -r -s -p 'MySQL password: ' DB_PASS; echo
-  read -r -p 'Database name [bank]: ' DB_NAME; DB_NAME=${DB_NAME:-bank}
+  # Non-interactive use (CI, scripted setups): set SETUP_DB_HOST/PORT/USER/PASSWORD/NAME first.
+  ask() { local var=$1 prompt=$2 default=$3 value; value=${!var-}
+          [ -n "${!var+x}" ] || read -r -p "$prompt [$default]: " value; echo "${value:-$default}"; }
+  DB_HOST=$(ask SETUP_DB_HOST 'MySQL host' localhost)
+  DB_PORT=$(ask SETUP_DB_PORT 'MySQL port' 3306)
+  DB_USER=$(ask SETUP_DB_USER 'MySQL user' root)
+  if [ -n "${SETUP_DB_PASSWORD+x}" ]; then DB_PASS=$SETUP_DB_PASSWORD; else read -r -s -p 'MySQL password: ' DB_PASS; echo; fi
+  DB_NAME=$(ask SETUP_DB_NAME 'Database name' bank)
   DB_PASS_ENC=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$DB_PASS")
   python3 - "$BACKEND/.env.example" "$BACKEND/.env" \
     "mysql+pymysql://$DB_USER:$DB_PASS_ENC@$DB_HOST:$DB_PORT/$DB_NAME?charset=utf8mb4" "$(secret)" "$(secret)" <<'PYEOF'
