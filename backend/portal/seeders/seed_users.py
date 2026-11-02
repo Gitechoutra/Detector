@@ -211,5 +211,10 @@ def sync_on_startup(app):
                 report = seed_users(conn)
             if report:
                 app.logger.info('Dummy accounts synchronised with .env: %s', report)
+        except sa.exc.OperationalError as exc:
+            if getattr(exc.orig, 'args', [None])[0] == 1049:      # MySQL: unknown database
+                app.logger.info('Database does not exist yet: run `flask init-db`.')
+            else:
+                app.logger.warning('Dummy-account sync failed: %s', exc)
         except Exception as exc:  # noqa: BLE001  (a sync problem must not stop the API)
             app.logger.warning('Dummy-account sync failed: %s', exc)
