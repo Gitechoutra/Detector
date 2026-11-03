@@ -25,32 +25,57 @@ Flask-Migrate / Alembic.
 
 ## 1. Quick start
 
-Prerequisites: Python 3.11+, Node 18+, MySQL 8.
+Prerequisites: Python 3.11+, Node 18+, a running MySQL 8 server.
+
+**One step** (after `git clone` or `git pull`), from the repository root:
 
 ```bash
-# 1. Create the database (once)
-mysql -u root -p -e "CREATE DATABASE bank CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-# 2. Backend
-cd backend
-python -m venv .venv
-.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-copy .env.example .env          # macOS/Linux: cp .env.example .env  – then edit it
-flask db upgrade                # every table, the dummy accounts (from .env), sample history, rules, settings
-python app.py                   # http://127.0.0.1:5000
-
-# 3. Frontend (new terminal)
-cd frontend
-npm install
-npm run dev                     # http://localhost:5173
+powershell -ExecutionPolicy Bypass -File .\setup.ps1     # Windows
+bash setup.sh                                            # macOS / Linux
 ```
 
-Open **http://localhost:5173** and sign in with one of the dummy accounts below.
+The script:
+- creates `backend/.venv` and installs `requirements.txt`;
+- creates `backend/.env` from `.env.example` if it doesn't exist yet. It asks for your MySQL host, user, password
+  and database name, and generates random secret keys. An existing `.env` is never changed;
+- runs `flask init-db`, which creates the database if it's missing and then runs every migration. That builds
+  all tables, the dummy accounts, the sample transaction history, the fraud rules and the settings;
+- runs `npm ci` for the frontend.
 
-**After pulling new code:** run `pip install -r requirements.txt` and `flask db upgrade` again. The migrations
-are committed in `backend/migrations/versions/` (never autogenerate your own), so every developer's database
-ends up with the same tables, dummy accounts and sample data. Re-running `flask db upgrade` is always safe.
+Re-running it is safe: nothing is deleted, and seed rows are only inserted when missing.
+For a non-interactive setup (CI, scripted machines), set `SETUP_DB_HOST`, `SETUP_DB_PORT`, `SETUP_DB_USER`,
+`SETUP_DB_PASSWORD` and `SETUP_DB_NAME` before running the script; it then asks nothing.
+
+Then start the app in two terminals:
+
+```bash
+cd backend  && .venv\Scripts\python.exe app.py      # macOS/Linux: .venv/bin/python app.py  → http://127.0.0.1:5000
+cd frontend && npm run dev                            # http://localhost:3000
+```
+
+**Manual setup** (same result):
+
+```bash
+cd backend
+python -m venv .venv && .venv\Scripts\activate        # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+copy .env.example .env                                 # macOS/Linux: cp – then set DATABASE_URL and the secret keys
+flask init-db                                          # creates the database if needed + all migrations and seed data
+cd ../frontend && npm ci
+```
+
+**After `git pull`:** run the setup script again, or `pip install -r requirements.txt`, `flask db upgrade` and
+`npm ci`. The migrations are committed in `backend/migrations/versions/`; never autogenerate your own. That way
+every developer's database ends up with the same tables, dummy accounts and sample data.
+
+**Tests:** `cd backend && .venv\Scripts\python.exe -m pytest -q`. They create and drop their own `<db>_test`
+database on the same server and never touch your data.
+
+**What is in git and what isn't:**
+- **In git:** migrations, seeders (dummy accounts, sample history, rules, watchlist, settings), tests,
+  `.env.example`, `.flaskenv`, `requirements.txt`, `package-lock.json`.
+- **Not in git (each machine has its own):** `backend/.env` (passwords and keys), `.venv/`, `node_modules/`, `dist/`
+  and logs.
 
 ### `.env`
 

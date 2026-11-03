@@ -32,7 +32,8 @@ def create_app(config_class=Config):
     api.init_app(app)
     routes.init_app(app)
 
-    from portal.seeds import seed_command
+    from portal.seeds import init_db_command, seed_command
+    app.cli.add_command(init_db_command)
     app.cli.add_command(seed_command)
 
     from portal.seeders.seed_users import sync_on_startup
