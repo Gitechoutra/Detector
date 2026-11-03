@@ -11,12 +11,11 @@ The status is always derived from the open cases (refresh_account_status), and
 every case action is written to the append-only investigation_actions table."""
 import uuid
 
-from sqlalchemy import text
-
 from portal.extensions import db
 from portal.helpers.audit import write_audit
 from portal.helpers.helpers import inr, notify, raise_alert
 from portal.helpers.responses import ApiError
+from portal.helpers.validators import as_text
 from portal.models import (Account, Alert, InvestigationAction, InvestigationCase, ReceiverBlock, Transaction, now)
 from portal.models.investigations import FINAL_STATUSES, OPEN_STATUSES, mask_account
 
@@ -90,7 +89,7 @@ def _record(case, action, account, prev_case, prev_account, reason, detective=No
     db.session.add(InvestigationAction(
         case_id=case.id, detective_id=detective.id if detective else None, account_id=account.id, action=action,
         previous_case_status=prev_case, new_case_status=case.status, previous_account_status=prev_account,
-        new_account_status=account.status, reason=(reason or '')[:500] or None))
+        new_account_status=account.status, reason=as_text(reason)[:500] or None))
 
 
 def open_case(txn, account, case_type, reason):
@@ -141,8 +140,7 @@ def restrict_sender(txn, result):
 # ── Detective actions ───────────────────────────────────────────────────────
 
 def _lock_case(case_id):
-    db.session.execute(text('SELECT id FROM investigation_cases WHERE id = :id FOR UPDATE'), {'id': case_id})
-    case = db.session.get(InvestigationCase, case_id, populate_existing=True)
+    case = db.session.get(InvestigationCase, case_id, populate_existing=True, with_for_update=True)
     if case is None:
         raise ApiError('Investigation case not found.', 404, 'NOT_FOUND')
     return case
@@ -166,10 +164,10 @@ def decide(detective, case_id, decision, reason, confirm, ip=None):
     """The final decision. Validated here, not only in the browser; the account's
     access changes in the same database transaction that records the decision."""
     from portal.helpers.payment_engine import _lock_accounts
-    decision = (decision or '').strip().upper()
+    decision = as_text(decision).strip().upper()
     if decision not in DECISIONS:
         raise ApiError('Choose PERMANENT_BLOCK or APPROVE.', 422, 'VALIDATION_ERROR', {'field': 'decision'})
-    reason = (reason or '').strip()
+    reason = as_text(reason).strip()
     if len(reason) < MIN_REASON:
         raise ApiError(f'Give a reason of at least {MIN_REASON} characters.', 422, 'VALIDATION_ERROR',
                        {'field': 'reason'})

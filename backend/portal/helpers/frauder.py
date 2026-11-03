@@ -29,7 +29,7 @@ from portal.helpers.helpers import security_event, setting
 from portal.helpers.fraud_engine import band_floor
 from portal.helpers.payment_engine import expire_confirmations, hard_block_rules, send_money
 from portal.helpers.responses import ApiError
-from portal.helpers.validators import parse_amount
+from portal.helpers.validators import as_text, parse_amount
 from portal.models import (Account, Alert, Device, Location, LoginAttempt, RiskAssessment, SecurityEvent,
                            InvestigationAction, InvestigationCase, ReceiverBlock, Transaction, User, WatchlistEntry,
                            money, now)
@@ -84,7 +84,7 @@ def _invalid(field, message):
 def _attacker_details(data, for_login=False):
     """Validates the values the presenter typed and returns them as the
     SIMULATED record stored with the attempt."""
-    city_name = (data.get('city') or '').strip()
+    city_name = as_text(data.get('city')).strip()
     if not city_name:
         raise _invalid('city', 'Enter the target city.')
     location = Location.query.filter(func.lower(Location.city) == city_name.lower()).first()
@@ -94,8 +94,8 @@ def _attacker_details(data, for_login=False):
                                f'{cities}.')
 
     registered = bool(data.get('use_registered_device')) and not for_login
-    device_type = (data.get('device_type') or '').strip()
-    device_id = (data.get('device_id') or '').strip()
+    device_type = as_text(data.get('device_type')).strip()
+    device_id = as_text(data.get('device_id')).strip()
     if not registered:
         if not device_type or len(device_type) > 60:
             raise _invalid('device_type', 'Enter the device type (up to 60 characters), e.g. Android phone.')
@@ -103,14 +103,14 @@ def _attacker_details(data, for_login=False):
             raise _invalid('device_id', 'Device ID: 3–40 letters, digits or . _ : - (e.g. ATK-PHONE-01).')
 
     try:
-        ip = str(ipaddress.ip_address((data.get('ip_address') or '').strip()))
+        ip = str(ipaddress.ip_address(as_text(data.get('ip_address')).strip()))
     except ValueError:
         raise _invalid('ip_address', 'Enter a valid IPv4 or IPv6 address, e.g. 203.0.113.25.')
 
-    target_location = (data.get('target_location') or '').strip()
+    target_location = as_text(data.get('target_location')).strip()
     if len(target_location) > 120:
         raise _invalid('target_location', 'Target location can be at most 120 characters.')
-    scenario = (data.get('scenario') or '').strip().upper() or None
+    scenario = as_text(data.get('scenario')).strip().upper() or None
     if scenario and scenario not in dict(SCENARIOS):
         raise _invalid('scenario', 'Choose a fraud scenario from the list.')
 
@@ -130,7 +130,7 @@ CONTEXT_FIELDS = ('city', 'target_location', 'device_type', 'device_id', 'ip_add
 def _no_context(data, victim):
     """No attempt context entered (the console no longer asks for one): the
     attempt uses the victim's own home city and registered device, if any."""
-    scenario = (data.get('scenario') or '').strip().upper() or None
+    scenario = as_text(data.get('scenario')).strip().upper() or None
     if scenario and scenario not in dict(SCENARIOS):
         raise _invalid('scenario', 'Choose a fraud scenario from the list.')
     return {'source': 'FRAUDER', 'city': victim.home_location.city if victim.home_location else None,
@@ -346,7 +346,7 @@ def attempts(limit=40):
 
 def login_attempt(frauder, data):
     victim = _victim(data.get('victim_id'))
-    outcome = (data.get('outcome') or '').upper()
+    outcome = as_text(data.get('outcome')).upper()
     if outcome not in ('WRONG_PASSWORD', 'STOLEN_PASSWORD'):
         raise ApiError('Choose "wrong password" or "stolen password".', 422, 'VALIDATION_ERROR')
     details = _attacker_details(data, for_login=True)
@@ -382,7 +382,7 @@ def login_attempt(frauder, data):
 def otp_attempt(frauder, data):
     victim = _victim(data.get('victim_id'))
     ip = None
-    if (data.get('ip_address') or '').strip():
+    if as_text(data.get('ip_address')).strip():
         try:
             ip = str(ipaddress.ip_address(data['ip_address'].strip()))
         except ValueError:

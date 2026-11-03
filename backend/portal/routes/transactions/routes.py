@@ -7,7 +7,7 @@ from portal.helpers import payment_engine
 from portal.helpers.auth import resolve_location_id
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import USER, client_ip, role_required
-from portal.helpers.validators import json_body, parse_amount, require_str
+from portal.helpers.validators import as_text, json_body, parse_amount, require_str
 from portal.models import Notification, Transaction
 from . import bp
 
@@ -58,8 +58,11 @@ def send():
     data = json_body()
     amount = parse_amount(data.get('amount'))
     remarks = require_str(data, 'remarks', 140, 'Remarks', required=False)
-    key = (request.headers.get('Idempotency-Key') or data.get('idempotency_key') or '').strip()[:64] or None
-    location_id = resolve_location_id(data.get('location_id') or get_jwt().get('location_id'), g.current_user)
+    key = as_text(request.headers.get('Idempotency-Key') or data.get('idempotency_key')).strip()[:64] or None
+    location_id = data.get('location_id')
+    if location_id in (None, '', 0, '0'):
+        location_id = get_jwt().get('location_id')
+    location_id = resolve_location_id(location_id, g.current_user)
     txn, replayed = payment_engine.send_money(
         g.current_user, data.get('payment_method'), data, amount, remarks, key,
         device_id=g.device_id, ip=client_ip(), location_id=location_id)

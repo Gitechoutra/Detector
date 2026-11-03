@@ -12,7 +12,7 @@ from portal.helpers import detection_engine, investigations, payment_engine
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import DETECTION, client_ip, role_required
-from portal.helpers.validators import date_range_args, json_body, page_args, paginate, parse_int, require_str
+from portal.helpers.validators import as_text, date_range_args, json_body, page_args, paginate, parse_int, require_str
 from . import bp
 
 
@@ -176,7 +176,7 @@ def investigate(txn_id):
 @role_required(DETECTION)
 def decide(txn_id):
     data = json_body()
-    action = (data.get('action') or '').upper()
+    action = as_text(data.get('action')).upper()
     notes = require_str(data, 'notes', 500, 'Notes', required=False)
     result = payment_engine.analyst_decision(g.current_user, txn_id, action, notes, client_ip())
     message = {'released': 'Payment approved and released.', 'declined': 'Release failed: insufficient balance.',
@@ -268,7 +268,7 @@ def watchlist():
 @role_required(DETECTION)
 def add_watchlist():
     data = json_body()
-    entity_type = (data.get('entity_type') or '').upper()
+    entity_type = as_text(data.get('entity_type')).upper()
     if entity_type not in WATCHLIST_TYPES:
         raise ApiError('Type must be one of ' + ', '.join(WATCHLIST_TYPES), 422, 'VALIDATION_ERROR')
     value = _watchlist_value(entity_type, require_str(data, 'entity_value', 120, 'Value'))
