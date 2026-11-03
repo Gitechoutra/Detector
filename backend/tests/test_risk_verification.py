@@ -36,8 +36,8 @@ def _pay(app, amount, upi='quickcash@fsbank', r6_weight=None, owner_must_confirm
 
 # ── 1. Any risk factor → verification, whatever the score ──────────────────
 
-@pytest.mark.parametrize('weight, band', [(20, 'APPROVED'), (50, 'REVIEW'), (80, 'BLOCKED')])
-def test_any_risk_factor_is_held_for_verification_at_every_score(app, weight, band):
+@pytest.mark.parametrize('weight, band', [(20, 'APPROVED'), (50, 'REVIEW'), (69, 'REVIEW')])
+def test_any_risk_factor_below_the_blocking_threshold_is_held_for_the_owner(app, weight, band):
     t = _pay(app, 1000, r6_weight=weight)
     assert t['rules'] == ['R6'] and t['score'] == weight and t['decision'] == band   # band is still recorded
     assert t['status'] == 'UNDER_REVIEW' and t['confirmation'] == 'PENDING'          # never auto-approved/blocked
@@ -54,7 +54,8 @@ def test_no_risk_factor_completes_normally(app):
 
 def test_frauder_attempts_are_always_held(app):
     assert _pay(app, 1000, upi='priya@fsbank', owner_must_confirm=True)['status'] == 'UNDER_REVIEW'
-    assert _pay(app, 1000, r6_weight=90, owner_must_confirm=True)['status'] == 'UNDER_REVIEW'
+    # At the blocking threshold a Frauder attempt is stopped like any other payment.
+    assert _pay(app, 1000, r6_weight=90, owner_must_confirm=True)['status'] == 'BLOCKED'
 
 
 def test_decision_is_made_within_the_request(app):
@@ -68,7 +69,8 @@ def test_overview_counts_pending_verifications(app):
     with app.app_context():
         totals = analytics.summary()['totals']
         db.session.remove()
-    assert totals['pending_owner'] == 3 and totals['auto_approved'] == 0 and totals['auto_blocked'] == 0
+    # 20 and 50 wait for the owner; 80 reached the blocking threshold and was stopped.
+    assert totals['pending_owner'] == 2 and totals['auto_approved'] == 0 and totals['auto_blocked'] == 1
 
 
 def test_notification_wording(client):
@@ -116,13 +118,15 @@ def test_yes_sends_an_otp_and_moves_no_money_until_it_is_verified(client, app):
     assert balance(app, 'quickcash@demo.bank') == Decimal('6000')
 
 
-def test_high_risk_payment_also_needs_yes_and_otp(client, app):
+def test_high_risk_payment_cannot_be_authorized_by_the_owner(client, app):
     analyst = login(client, 'analyst@demo.bank')
     client.put('/api/detection/rules/R6', headers=analyst, json={'weight': 90})
-    rahul, data = _held(client)
-    assert data['risk_score'] == 90 and data['decision'] == 'BLOCKED'
-    assert answer(client, rahul, data['id'], 'YES').get_json()['data']['outcome'] == 'authorized'
-    assert balance(app, 'quickcash@demo.bank') == Decimal('6000')
+    rahul = login(client, 'rahul@demo.bank')
+    data = send(client, rahul, 1000, upi='quickcash@fsbank').get_json()['data']
+    assert data['risk_score'] == 90 and data['status'] == 'BLOCKED' and data['confirmation'] is None
+    res = client.post(f"/api/transactions/{data['id']}/confirmation", headers=rahul, json={'response': 'YES'})
+    assert res.status_code == 409                                     # nothing for the owner to answer
+    assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
 
 
 def test_wrong_otp_never_authorizes_and_too_many_block(client, app):

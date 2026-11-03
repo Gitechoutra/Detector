@@ -4,8 +4,10 @@ Persist, evaluate, score, decide and the balance movement all happen inside one
 DB transaction that is committed once.
 
 No rule triggered → completed at once (Frauder attempts are always held).
-Any of the nine rules triggered → held, whatever the score: a score below 70 is
-not treated as safe, and 70+ stays classified high risk but is held too. The
+Score at or above the blocking threshold (70) → stopped at once, the sending
+account TEMPORARILY_BLOCKED and a fraud investigation case opened for a
+detective (see investigations.py). Nothing is debited.
+Any other triggered rule (score below 70 is not treated as safe) → held, and the
 owner is asked "Suspicious transaction detected. Did you initiate this transaction?"
   YES → an OTP is sent to the owner's registered phone and email. Only a correct,
         unexpired OTP authorizes the payment, which is then re-validated
@@ -27,12 +29,12 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from portal.extensions import db
-from portal.models import (Account, Alert, Device, Notification, ReceiverBlock, Transaction, VerificationChallenge,
-                           WatchlistEntry, now)
+from portal.models import (Account, Alert, Device, InvestigationCase, Notification, ReceiverBlock, Transaction,
+                           VerificationChallenge, WatchlistEntry, now)
 from portal.models.receiver_blocks import snapshot
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError
-from portal.helpers import fraud_engine
+from portal.helpers import fraud_engine, investigations
 from portal.helpers.helpers import inr, notify, raise_alert, security_event, setting
 
 METHODS = ('UPI', 'QR', 'BANK_TRANSFER')
@@ -77,10 +79,11 @@ def resolve_receiver(method, data):
                        {'field': 'payment_method'})
     if account is None:
         raise ApiError('No account found with these receiver details.', 404, 'RECEIVER_NOT_FOUND')
-    if account.status == 'BLOCKED':
+    if account.status in ('BLOCKED', 'PERMANENTLY_BLOCKED') or (
+            account.status == 'TEMPORARILY_BLOCKED' and not investigations.can_receive(account)):
         raise ApiError('This receiver account is blocked after a fraud report and cannot receive payments.', 409,
                        'RECEIVER_BLOCKED')
-    if account.status != 'ACTIVE':
+    if account.status not in ('ACTIVE', 'TEMPORARILY_BLOCKED'):
         raise ApiError('The receiver account cannot accept payments right now.', 409, 'RECEIVER_INACTIVE')
     return account
 
@@ -144,6 +147,13 @@ def _settle(txn, at=None, reason=None):
         return False
     accounts = _lock_accounts(txn.sender_account_id, txn.receiver_account_id)
     sender, receiver = accounts[txn.sender_account_id], accounts[txn.receiver_account_id]
+    # Restrictions are enforced here too, so no route can move money around them.
+    if not investigations.can_send(sender):
+        _decline(txn, 'The sending account is restricted by a fraud investigation.')
+        return False
+    if not investigations.can_receive(receiver):
+        _decline(txn, 'The receiving account is blocked and cannot receive payments.')
+        return False
     if sender.balance < txn.amount:
         _decline(txn, 'Insufficient balance at the time of release.')
         return False
@@ -231,7 +241,13 @@ def _apply_decision(txn, result, owner_must_confirm=False):
         _auto_watchlist(txn, result)
         return
 
-    # Any risk factor, whatever the score: held until the owner verifies it.
+    if result['decision'] == 'BLOCKED' and not sender_user.is_simulated:
+        # At or above the blocking threshold: stopped, sender restricted, case for a detective.
+        investigations.restrict_sender(txn, result)
+        _auto_watchlist(txn, result)
+        return
+
+    # Any other risk factor (a score below the threshold is not treated as safe): held for the owner.
     txn.status = 'UNDER_REVIEW'
     txn.risk_explanation = explain(result, held=True) or (
         "Held for the account owner's verification: no fraud rule was triggered (risk score 0), but the payment "
@@ -284,8 +300,8 @@ def send_money(sender_user, method, receiver_data, amount, remarks=None, idempot
 
     if sender_user.status != 'ACTIVE':
         raise ApiError('Your account is locked. Payments are disabled.', 423, 'ACCOUNT_LOCKED')
-    if sender.status not in ('ACTIVE', 'BLOCKED'):
-        raise ApiError('Your account is frozen. Contact the bank.', 409, 'ACCOUNT_FROZEN')
+    if not investigations.can_send(sender):
+        raise ApiError(*investigations.send_refusal(sender))
     receiver = resolve_receiver(method, receiver_data)
     if receiver.id == sender.id:
         raise ApiError('You cannot send money to your own account.', 422, 'SAME_ACCOUNT')
@@ -595,12 +611,14 @@ def respond_to_confirmation(user, txn_id, response, ip=None):
 
 def _restriction(txn, sender, receiver):
     """Why an authorized payment still cannot be processed, or None."""
-    if sender.user.status != 'ACTIVE' or sender.status not in ('ACTIVE', 'BLOCKED'):
-        return 'the sender account is locked or frozen'
-    if receiver.status == 'BLOCKED':
+    if sender.user.status != 'ACTIVE' or not investigations.can_send(sender):
+        return 'the sender account is restricted, locked or frozen'
+    if receiver.status in ('BLOCKED', 'PERMANENTLY_BLOCKED'):
         return 'the receiver account has been blocked after a fraud report'
-    if receiver.status != 'ACTIVE' or receiver.user.status != 'ACTIVE':
+    if receiver.status not in ('ACTIVE', 'TEMPORARILY_BLOCKED') or receiver.user.status != 'ACTIVE':
         return 'the receiver account can no longer accept payments'
+    if not investigations.can_receive(receiver):
+        return 'the receiver account has been blocked after a fraud report'
     if sender.balance < txn.amount:
         return f'the available balance ({inr(sender.balance)}) is lower than the amount ({inr(txn.amount)})'
     hard = sorted(hard_block_rules() & {h.rule_code for h in txn.latest_hits()})
@@ -756,6 +774,9 @@ def _block_receiver(user, txn):
     write_audit('RECEIVER_BLOCKED', 'account', receiver.id,
                 {'transaction': txn.txn_ref, 'risk_score': txn.risk_score, 'factors': [f['code'] for f in factors],
                  'block_id': block.id}, actor=user)
+    investigations.open_case(txn, receiver, 'RECEIVER_REPORTED',
+                             f'{user.full_name} (the payer\'s account owner) denied initiating {txn.txn_ref} to '
+                             f'this account; risk score {txn.risk_score}.')
     return block
 
 
@@ -767,6 +788,12 @@ def lift_receiver_block(analyst, block_id, reason, ip=None):
         raise ApiError('Block not found.', 404, 'NOT_FOUND')
     if block.status != 'ACTIVE':
         raise ApiError('This block has already been lifted.', 409, 'ALREADY_LIFTED')
+    case = InvestigationCase.query.filter_by(account_id=block.account_id, transaction_id=block.transaction_id,
+                                             case_type='RECEIVER_REPORTED').first()
+    if case is not None and case.is_open:
+        # Lifting a block is an approval of its investigation case (recorded and audited there).
+        investigations.decide(analyst, case.id, 'APPROVE', reason, True, ip)
+        return db.session.get(ReceiverBlock, block_id, populate_existing=True)
     reason = (reason or '').strip()
     if len(reason) < 5:
         raise ApiError('Give a reason for lifting the block (at least 5 characters).', 422, 'VALIDATION_ERROR',

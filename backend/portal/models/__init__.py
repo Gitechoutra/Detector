@@ -25,3 +25,4 @@ from portal.models.system_settings import SystemSetting  # noqa: F401
 from portal.models.detection_runs import DetectionRun  # noqa: F401
 from portal.models.receiver_blocks import ReceiverBlock  # noqa: F401
 from portal.models.revoked_tokens import RevokedToken  # noqa: F401
+from portal.models.investigations import InvestigationAction, InvestigationCase  # noqa: F401

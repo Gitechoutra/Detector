@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../../api/client';
 import { Empty, ErrorNote, Loading, PageHead, Pagination, RiskScore, RuleChips, StatusBadge } from '../../components/ui';
 import { useApi } from '../../hooks';
 import { money, METHOD_LABEL, timeOnly } from '../../utils/format';
 
-const EMPTY = { date_from: '', date_to: '', status: '', risk_level: '', user_id: '', source: '', q: '', page: 1 };
+const EMPTY = { date_from: '', date_to: '', status: '', risk_level: '', user_id: '', source: '', q: '', flagged: '', sort: '', page: 1 };
+// Filters can arrive in the URL, e.g. from an overview card (?status=BLOCKED, ?flagged=1, ?sort=latency).
+const fromUrl = (params) => ({ ...EMPTY, ...Object.fromEntries([...params].filter(([k]) => k in EMPTY && k !== 'page')) });
 
 export default function Monitor() {
   const navigate = useNavigate();
-  const [filters, setFilters] = useState(EMPTY);
+  const [params] = useSearchParams();
+  const [filters, setFilters] = useState(() => fromUrl(params));
+  const fromOverview = [...params].length > 0;
   const [users, setUsers] = useState([]);
   const [paused, setPaused] = useState(false);
   const { data, error, loading } = useApi('/detection/transactions', filters, { interval: paused ? 0 : 2000 });
@@ -41,6 +45,7 @@ export default function Monitor() {
 
   return (
     <>
+      {fromOverview && <Link to="/detection" className="back-link">← Back to overview</Link>}
       <PageHead title="Live transaction monitor" subtitle="Refreshes every 2 seconds. Colour bar = decision; click a row to investigate.">
         <span className="row small muted">
           {paused ? '⏸ Paused' : <><span className="live-dot" /> Live</>}
@@ -71,6 +76,12 @@ export default function Monitor() {
           <select className="input input-sm" value={filters.source} onChange={set('source')}>
             <option value="">Manual + simulated</option><option value="manual">Manual</option><option value="simulated">Simulated</option>
           </select>
+          <select className="input input-sm" value={filters.flagged} onChange={set('flagged')}>
+            <option value="">All transactions</option><option value="1">Fraud attempts only</option>
+          </select>
+          <select className="input input-sm" value={filters.sort} onChange={set('sort')}>
+            <option value="">Newest first</option><option value="latency">Slowest decision first</option>
+          </select>
           {active && <button className="link-btn small" onClick={() => setFilters(EMPTY)}>Clear filters</button>}
         </div>
         <ErrorNote error={error} />
@@ -78,7 +89,7 @@ export default function Monitor() {
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr><th>Time</th><th>Ref</th><th>Sender</th><th>Receiver</th><th>Amount</th><th>Channel</th><th>City</th><th>Score</th><th>Rules fired</th><th>Status</th></tr>
+                <tr><th>Time</th><th>Ref</th><th>Sender</th><th>Receiver</th><th>Amount</th><th>Channel</th><th>City</th><th>Score</th><th>Rules fired</th><th>Decided in</th><th>Status</th></tr>
               </thead>
               <tbody>
                 {data.items.map((t) => (
@@ -93,6 +104,7 @@ export default function Monitor() {
                     <td className="small">{t.city || '—'}</td>
                     <td><RiskScore score={t.risk_score} /></td>
                     <td><RuleChips rules={t.rules} /></td>
+                    <td className="small nowrap">{t.latency_ms != null ? `${t.latency_ms} ms` : '—'}</td>
                     <td><StatusBadge status={t.status} />{t.review_stage === 'AWAITING_ANALYST' && <div className="small" style={{ color: 'var(--warning)' }}>needs analyst</div>}</td>
                   </tr>
                 ))}

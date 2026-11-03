@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { createContext, useContext, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { initials } from '../utils/format';
 
 const STATUS = {
@@ -9,6 +10,10 @@ const STATUS = {
   BLOCKED: ['Blocked', 'b-red'],
   DECLINED: ['Declined', 'b-red'],
   CANCELLED: ['Cancelled', 'b-slate'],
+  TEMPORARILY_BLOCKED: ['Temporarily blocked', 'b-amber'],
+  UNDER_INVESTIGATION: ['Under investigation', 'b-blue'],
+  PERMANENTLY_BLOCKED: ['Permanently blocked', 'b-red'],
+  ACTIVE: ['Active', 'b-green'],
   EXPIRED: ['Expired', 'b-slate'],
   USER_CONFIRMATION_PENDING: ['Confirmation pending', 'b-amber'],
   PROCESSING: ['Processing', 'b-blue'],
@@ -66,17 +71,20 @@ export function RuleChips({ rules }) {
   });
 }
 
-export function StatCard({ icon, label, value, sub, tone = 'blue' }) {
-  return (
-    <div className="card stat">
+export function StatCard({ icon, label, value, sub, tone = 'blue', to }) {
+  const body = (
+    <>
       <div className={`stat-icon tone-${tone}`}>{icon}</div>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div className="stat-label">{label}</div>
         <div className="stat-value">{value}</div>
         {sub && <div className="stat-sub">{sub}</div>}
       </div>
-    </div>
+      {to && <span className="stat-go" aria-hidden>→</span>}
+    </>
   );
+  // With `to`, the whole card opens its detail view.
+  return to ? <Link to={to} className="card stat stat-link">{body}</Link> : <div className="card stat">{body}</div>;
 }
 
 export function Avatar({ name, tone = 'blue' }) {
@@ -102,7 +110,19 @@ export function ErrorNote({ error }) {
   return <div className="notice notice-danger">⚠ {error}</div>;
 }
 
+/** True inside a TabbedPage: the page heading is already shown above the tabs. */
+export const InTabs = createContext(false);
+
 export function PageHead({ title, subtitle, children }) {
+  const inTabs = useContext(InTabs);
+  if (inTabs) {
+    return (subtitle || children) ? (
+      <div className="section-head">
+        {subtitle && <p>{subtitle}</p>}
+        {children && <div className="row wrap">{children}</div>}
+      </div>
+    ) : null;
+  }
   return (
     <div className="page-head">
       <div>

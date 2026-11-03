@@ -189,17 +189,18 @@ def test_absolute_restriction_rule_blocks_without_asking(client, app):
     assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
 
 
-def test_high_score_still_waits_for_the_owner(client, app):
+def test_high_score_is_stopped_and_the_sender_restricted(client, app):
     analyst = login(client, 'analyst@demo.bank')
     client.put('/api/detection/rules/R6', headers=analyst, json={'weight': 80})
     headers = login(client, 'rahul@demo.bank')
     data = send(client, headers, 10000, upi='quickcash@fsbank').get_json()['data']
-    assert data['risk_score'] == 80 and data['decision'] == 'BLOCKED'          # the band is still recorded
-    assert data['display_status'] == 'USER_CONFIRMATION_PENDING'
+    assert data['risk_score'] == 80 and data['decision'] == 'BLOCKED' and data['status'] == 'BLOCKED'
+    assert 'temporarily restricted' in data['final_reason']
     res = client.post(f"/api/detection/transactions/{data['id']}/decision", headers=analyst,
                       json={'action': 'APPROVE'})
-    assert res.status_code == 409 and res.get_json()['error']['code'] == 'AWAITING_OWNER'
+    assert res.status_code == 409                                     # not an analyst-approvable review
     assert balance(app, 'quickcash@demo.bank') == Decimal('5000')
+    assert balance(app, 'rahul@demo.bank') == Decimal('250000')
 
 
 def test_resent_otp_wrong_three_times_blocks(client, app):

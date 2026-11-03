@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import bindparam, func, text
 
 from portal.extensions import db
+from portal.helpers import investigations
 from portal.helpers.audit import write_audit
 from portal.helpers.auth import _clear_expired_lock, register_attempt
 from portal.helpers.helpers import security_event, setting
@@ -30,7 +31,9 @@ from portal.helpers.payment_engine import expire_confirmations, hard_block_rules
 from portal.helpers.responses import ApiError
 from portal.helpers.validators import parse_amount
 from portal.models import (Account, Alert, Device, Location, LoginAttempt, RiskAssessment, SecurityEvent,
-                           ReceiverBlock, Transaction, User, WatchlistEntry, money, now)
+                           InvestigationAction, InvestigationCase, ReceiverBlock, Transaction, User, WatchlistEntry,
+                           money, now)
+from portal.models.investigations import OPEN_STATUSES
 
 # Designated dummy accounts, by seed_key (their emails come from .env and may change).
 VICTIMS = ('rahul', 'suresh', 'karan')
@@ -198,7 +201,7 @@ def context():
         'receivers': [{'id': u.id, 'name': u.full_name, 'upi_id': u.primary_account.upi_id,
                        'balance': money(u.primary_account.balance),
                        'watchlisted': u.primary_account.upi_id in listed or u.primary_account.account_number in listed,
-                       'blocked': u.primary_account.status == 'BLOCKED'}
+                       'blocked': u.primary_account.status in ('BLOCKED', 'PERMANENTLY_BLOCKED')}
                       for u in sorted(receivers, key=lambda u: order[u.seed_key])],
         # Suggestions for the free-text fields; nothing is pre-selected.
         'cities': [l.city for l in Location.query.order_by(Location.city).all()],
@@ -477,6 +480,7 @@ def reset_attempts(actor=None):
             .bindparams(bindparam('ips', expanding=True)), {'ips': list(typed_ips)}).rowcount
     in_ids = {'ids': ids or [0]}
     expanding = lambda sql: text(sql).bindparams(bindparam('ids', expanding=True))  # noqa: E731
+    _close_cases(ids, counts, actor)
     _undo_receiver_blocks(ids, counts)
     for label, sql in (
         ('simulation_events', 'DELETE FROM simulation_events'),
@@ -593,11 +597,30 @@ def _undo_receiver_blocks(sim_txn_ids, counts):
         db.session.delete(block)
     db.session.flush()
     for account in accounts:
+        investigations.refresh_account_status(account)
         if ReceiverBlock.query.filter_by(account_id=account.id, status='ACTIVE').count():
             continue
-        if account.status == 'BLOCKED':
-            account.status = 'ACTIVE'
         WatchlistEntry.query.filter(WatchlistEntry.source == 'AUTO',
                                     WatchlistEntry.entity_value.in_([account.upi_id, account.account_number]),
                                     WatchlistEntry.reason.like('Receiver blocked:%')).delete(synchronize_session=False)
     counts['receiver_blocks'] = len(blocks)
+
+
+def _close_cases(sim_txn_ids, counts, actor):
+    """Open investigation cases caused by Frauder attempts are closed (RESOLVED,
+    recorded in the case history) and the accounts' restrictions re-derived.
+    Decided cases are never touched: a permanent block stays permanent."""
+    cases = InvestigationCase.query.filter(InvestigationCase.transaction_id.in_(sim_txn_ids or [0]),
+                                           InvestigationCase.status.in_(OPEN_STATUSES)).all()
+    for case in cases:
+        previous, account_before = case.status, case.account.status
+        case.status, case.decided_at = 'RESOLVED', now()
+        case.decision_reason = 'Closed without a decision: the Frauder attempt that opened it was reset.'
+        case.account.status = account_before
+        db.session.flush()
+        db.session.add(InvestigationAction(
+            case_id=case.id, detective_id=actor.id if actor else None, account_id=case.account_id,
+            action='CLOSED_BY_RESET', previous_case_status=previous, new_case_status='RESOLVED',
+            previous_account_status=account_before, new_account_status=investigations.refresh_account_status(
+                case.account), reason=case.decision_reason))
+    counts['investigation_cases_closed'] = len(cases)

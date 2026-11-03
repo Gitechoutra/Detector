@@ -206,7 +206,7 @@ function ResultPanel({ result, onAgain, onAnswered }) {
     return (
       <div className="stack">
         <SecurityConfirmation items={[result]} onChange={onAnswered} />
-        <div className="row wrap"><Link className="btn btn-ghost" to="/user/transactions">View history</Link></div>
+        <div className="row wrap"><Link className="btn btn-ghost" to="/user/activity/all">View history</Link></div>
       </div>
     );
   }
@@ -236,7 +236,7 @@ function ResultPanel({ result, onAgain, onAnswered }) {
       ) : <p className="muted small">No fraud rules fired.</p>}
       <div className="row wrap">
         <button className="btn btn-ghost" onClick={onAgain}>Send another payment</button>
-        <Link className="btn btn-ghost" to="/user/transactions">View history</Link>
+        <Link className="btn btn-ghost" to="/user/activity/all">View history</Link>
       </div>
     </div>
   );

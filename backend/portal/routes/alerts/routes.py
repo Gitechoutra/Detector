@@ -16,7 +16,7 @@ RESOLUTIONS = ('CONFIRMED_FRAUD', 'FALSE_POSITIVE')
 @role_required(DETECTION)
 def list_alerts():
     query = Alert.query
-    for field in ('status', 'severity', 'alert_type'):
+    for field in ('status', 'severity', 'alert_type', 'resolution'):
         if request.args.get(field):
             query = query.filter(getattr(Alert, field) == request.args[field])
     if request.args.get('source') == 'manual':

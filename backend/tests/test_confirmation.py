@@ -160,17 +160,17 @@ class _Snap:
         return getattr(self._fr, name)
 
 
-def test_multiple_rules_still_wait_for_the_owner(client, app, fr):
+def test_multiple_rules_reaching_the_threshold_stop_the_payment(client, app, fr):
     for _ in range(3):
         fr.login('WRONG_PASSWORD', device='ATK-MULTI', city='hyderabad')
     device = fr.login('STOLEN_PASSWORD', device='ATK-MULTI', city='hyderabad')['device_id']
     attempt = fr.transfer(80000, receiver='quickcash', device=str(device), city='hyderabad')
     assert {'R4', 'R6', 'R9'} <= rules(attempt) and attempt['risk_score'] == 100
-    assert attempt['decision'] == 'BLOCKED' and attempt['display_status'] == 'PROCESSING'
+    assert attempt['decision'] == 'BLOCKED' and attempt['status'] == 'BLOCKED'
     rahul = login(client, 'rahul@demo.bank')
-    assert _answer(client, rahul, attempt['id'], 'YES').get_json()['data']['outcome'] == 'authorized'
-    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank'] - 80000
-    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank'] + 80000
+    assert _answer(client, rahul, attempt['id'], 'YES').status_code == 409
+    assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
+    assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']
 
 
 def test_frauder_attempt_without_rules_is_still_held(app, fr):

@@ -153,17 +153,17 @@ def test_r9_wrong_otps(client, fr):
 
 # ── Decisions & money ───────────────────────────────────────────────────────
 
-def test_held_attempt_moves_no_money_and_explains(app, fr):
+def test_high_risk_attempt_is_stopped_and_moves_no_money(app, fr):
     fr.login('WRONG_PASSWORD'), fr.login('WRONG_PASSWORD'), fr.login('WRONG_PASSWORD')
     device = fr.login('STOLEN_PASSWORD', city='hyderabad')['device_id']
     result = fr.transfer(80000, receiver='quickcash', device=str(device))
-    assert {'R4', 'R6', 'R9'} <= rules(result) and result['risk_score'] == 100 and result['status'] == 'UNDER_REVIEW'
-    assert result['outcome_label'] == 'PROCESSING' and result['confirmation'] is None
+    assert {'R4', 'R6', 'R9'} <= rules(result) and result['risk_score'] == 100 and result['status'] == 'BLOCKED'
+    assert result['outcome_label'] == 'BLOCKED' and result['confirmation'] is None
     assert result['risk_explanation'] is None and result['final_reason'] is None   # no approval wording
     assert result['balances']['sender']['before'] == result['balances']['sender']['after'] == 250000
     labels = [i['label'] for i in result['timeline']]
     for step in ('Transaction submitted', 'Fraud rules evaluated', 'Rules triggered', 'Risk score calculated',
-                 'Risk band (recorded)', 'Security alert created', 'Processing – no money moved yet'):
+                 'Risk band (recorded)', 'Security alert created', 'Blocked – no money moved'):
         assert step in labels, step
     assert balance(app, 'rahul@demo.bank') == OPENING['rahul@demo.bank']
     assert balance(app, 'quickcash@demo.bank') == OPENING['quickcash@demo.bank']

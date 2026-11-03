@@ -8,7 +8,8 @@ weight to a risk score, `Risk = min(100, Σ weights)`. The score and its band (0
 |-----------|--------------|--------------|
 | No rule triggered (genuine payment by the owner) | SUCCESSFUL | Money moves immediately; the receiver is credited |
 | Any Frauder attempt, even with no rule triggered | USER_CONFIRMATION_PENDING | Never made by the owner, so always held for their YES/NO |
-| Any rule triggered (any score – below 70 is not "safe", 70+ stays high risk) | USER_CONFIRMATION_PENDING | Held, nothing debited; the owner gets "Suspicious transaction detected. Did you initiate this transaction?" |
+| Any rule triggered, score below 70 (not treated as safe) | USER_CONFIRMATION_PENDING | Held, nothing debited; the owner gets "Suspicious transaction detected. Did you initiate this transaction?" |
+| Score 70 or more (the blocking threshold) | BLOCKED | Stopped at once; the **sending account is TEMPORARILY_BLOCKED** and a fraud investigation case opens for a detective |
 | Owner answers YES | OTP_VERIFICATION_PENDING | An OTP goes to the owner's registered phone and e-mail; nothing moves yet |
 | Correct, unexpired OTP | SUCCESSFUL | Re-validated (accounts, balance), then debited and credited |
 | Wrong OTP 3 times | BLOCKED | No money moves; HIGH alert |
@@ -103,6 +104,12 @@ being paid) and Detection open side by side. Every customer sends and receives w
 
 ## 3. The four roles
 
+**User dashboard cards.** Every card opens its own list (`/user/activity/<view>`), built from real
+transactions: Total, Successful, Pending, Failed (with the failure reason), Blocked (with the fraud indicators and
+reason), Money sent, Money received and Awaiting your answer. The balance and security cards are clickable too.
+Each list has search (transaction ID, name, UPI ID, remark), a date range, sorting, pagination, a back button,
+and loading, empty and error states. API: `GET /api/user/transactions?view=&q=&date_from=&date_to=&sort=&page=`.
+
 **User (manual).** Sends money by UPI ID, QR code (upload the receiver's QR image or paste its data) or
 bank transfer (account number + IFSC). Sees balance, history, status and the rules that flagged a payment.
 When any rule flags a payment, the user sees **Security Verification Required** with the amount,
@@ -122,6 +129,36 @@ QR code.
 - **Alerts & cases:** assign, add notes, close as confirmed fraud or false positive.
 - **Rule console:** enable or disable rules, change weights, thresholds and score bands. Every change is audited.
 - **Watchlist**, plus **security events / login attempts / audit trail** with hash-chain verification.
+- **Fraud investigation queue** ("Temporary Account Blocks / Fraud Investigation Queue", `/detection/investigations`):
+  every account the engine restricted, with tabs for pending, under investigation, permanently blocked,
+  approved and resolved cases, and an audit trail.
+  - **When an account is restricted:** a payment at or above the blocking threshold (70, from the risk bands)
+    is stopped; nothing is debited, ever. The sending account becomes `TEMPORARILY_BLOCKED`: it cannot send by
+    any route, but it can still receive. A case opens automatically (one per account and fraud event, never
+    duplicated), and the customer is notified and sees a banner. A receiver blocked after an owner's NO also
+    gets a case (status `BLOCKED`: cannot receive).
+  - **The queue table** shows case, masked account, customer, transaction ID, amount, date, type, detection
+    reason, each risk indicator with its score, the overall score, detection time, account status and case
+    status. It has search, sorting and pagination.
+  - **The case page** shows full transaction, customer and account details, all nine rules with their
+    individual results, the overall score, earlier suspicious transactions, related alerts, the reason for the
+    restriction and the case history.
+  - **Decisions:** "Start investigation" (`UNDER_INVESTIGATION`), then either **Approve** (restriction removed,
+    account `ACTIVE`, customer notified) or **Permanently block** (`PERMANENTLY_BLOCKED`: no payments to or from
+    the account, other open cases closed, customer notified). Both need a reason of at least 10 characters
+    and a confirmation, and are checked on the server.
+  - **Decisions are final.** The access change and the case record are saved in one database transaction.
+  - **Audit trail:** every action (case, detective, account, previous and new account status, previous and
+    new case status, decision, reason, time) is written to `investigation_actions`, which database triggers
+    make append-only. It is also recorded in the hash-chained audit log.
+  - **Enforcement:** restrictions are checked when a payment starts (UPI, QR, bank transfer, the Frauder
+    console), when an owner authorizes a held payment, and again in settlement itself, so no route can move
+    money around them.
+  - **APIs:** `GET /api/detection/investigations?view=&q=&sort=&page=`, `GET /api/detection/investigations/<id>`,
+    `POST …/<id>/start`, `POST …/<id>/decision {"decision": "APPROVE"|"PERMANENT_BLOCK", "reason", "confirm": true}`,
+    `GET /api/detection/investigations/history` – Detection role only.
+  - **Frauder reset:** "Reset fraud attempts" closes cases still open from Frauder attempts (recorded as
+    `CLOSED_BY_RESET`). It never undoes a detective's decision.
 - **Detection Engine:** runs the nine SQL rules over the stored transactions of the dummy accounts – the
   seeded sample history plus every payment made since – and shows what they find. You can choose one account
   or all of them, a period, and whether to include Frauder attempts. It shows rule hits, risk bands, a
@@ -326,6 +363,9 @@ index means a double-clicked submit creates one payment.
    retired (every flagged payment is verified by its owner).
 7. **0011_notification_cleared**: `notifications.cleared_at` – "Mark all read" clears the list (rows are kept).
 8. **0012_revoked_tokens**: logout revokes the login token; every request rejects a revoked token.
+9. **0013_fraud_investigations**: account statuses `TEMPORARILY_BLOCKED` and `PERMANENTLY_BLOCKED`, the
+   `investigation_cases` table and the append-only `investigation_actions` table. Receivers that were already
+   blocked get an open case.
 
 **Seeded sample history** (`seed_transactions.py`, references `SEED-0001`…`SEED-0024`):
 - Ordinary payments between the dummy accounts in the last two months.
@@ -366,7 +406,7 @@ cd backend
 pytest -q
 ```
 
-The 160 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
+The 177 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
 server, named automatically from `DATABASE_URL`. Delete it afterwards if you only want one database. They cover:
 - all four logins, account lockout and role-based access
 - every rule firing individually
@@ -408,7 +448,7 @@ backend/
   config/config.py    Config / TestConfig, read from .env
   docs/API.md         every endpoint
   logs/               app.log (rotating)
-  migrations/         Alembic env + versions 0001–0012 (committed – do not autogenerate)
+  migrations/         Alembic env + versions 0001–0013 (committed – do not autogenerate)
   portal/
     __init__.py       create_app(): logger → db/migrate → JWT → api → routes → seed CLI
     extensions.py     db, migrate, jwt

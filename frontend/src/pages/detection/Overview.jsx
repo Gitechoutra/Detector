@@ -13,7 +13,13 @@ export default function Overview() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ date_from: '', date_to: '', source: '' });
   const { data, error } = useApi('/analytics/summary', filters, { interval: 5000 });
+  // A card's list, with the same date range and source as the overview.
+  const link = (page, extra = {}) => {
+    const query = new URLSearchParams(Object.entries({ ...filters, ...extra }).filter(([, v]) => v)).toString();
+    return `/detection/${page}${query ? `?${query}` : ''}`;
+  };
   const live = useApi('/detection/live', { limit: 8 }, { interval: 3000 });
+  const cases = useApi('/detection/investigations', { view: 'open', page_size: 1 }, { interval: 5000 });
   const confirmations = useApi('/detection/confirmations', null, { interval: 4000 });
   const set = (k) => (e) => setFilters((f) => ({ ...f, [k]: e.target.value }));
 
@@ -21,7 +27,7 @@ export default function Overview() {
 
   return (
     <>
-      <PageHead title="Detection overview" subtitle="Every manual and simulated transaction, scored in real time.">
+      <PageHead title="Overview" subtitle="Accounts waiting for a decision, and every transaction scored in real time.">
         <input type="date" className="input input-sm" value={filters.date_from} onChange={set('date_from')} aria-label="From date" />
         <input type="date" className="input input-sm" value={filters.date_to} onChange={set('date_to')} aria-label="To date" />
         <select className="input input-sm" value={filters.source} onChange={set('source')}>
@@ -29,18 +35,21 @@ export default function Overview() {
         </select>
         <span className="row small muted"><span className="live-dot" /> Live</span>
       </PageHead>
+      <CaseSummary counts={cases.data?.counts} />
+
+      <h2 className="section-title">Transactions</h2>
       <ErrorNote error={error} />
       {!data ? <Loading /> : (
         <>
           <div className="grid grid-4">
-            <StatCard icon="⇄" tone="blue" label="Total transactions" value={num(data.totals.total)} sub={moneyShort(data.totals.volume) + ' volume'} />
-            <StatCard icon="✓" tone="green" label="Approved" value={num(data.totals.approved)} />
-            <StatCard icon="⏸" tone="amber" label="Under review" value={num(data.totals.under_review)} sub={`${live.data?.awaiting_analyst ?? 0} awaiting analyst`} />
-            <StatCard icon="⛔" tone="red" label="Blocked" value={num(data.totals.blocked)} sub={moneyShort(data.totals.blocked_amount) + ' stopped'} />
-            <StatCard icon="🎯" tone="purple" label="Fraud attempts detected" value={num(data.totals.flagged)} sub="Initial decision Review or Blocked" />
-            <StatCard icon="🚨" tone="red" label="Total alerts" value={num(data.totals.alerts)} sub={`${data.totals.open_alerts} open · ${data.totals.high_alerts} high`} />
-            <StatCard icon="⏱" tone="blue" label="Decision latency (p95)" value={data.latency.p95_ms != null ? `${data.latency.p95_ms} ms` : '—'} sub={data.latency.p50_ms != null ? `median ${data.latency.p50_ms} ms · target ≤ 500 ms` : 'no data yet'} />
-            <StatCard icon="✔" tone="green" label="Confirmed fraud" value={num(data.totals.confirmed_fraud)} sub="Resolved by analysts" />
+            <StatCard to={link('monitor')} icon="⇄" tone="blue" label="Total transactions" value={num(data.totals.total)} sub={moneyShort(data.totals.volume) + ' volume'} />
+            <StatCard to={link('monitor', { status: 'COMPLETED' })} icon="✓" tone="green" label="Approved" value={num(data.totals.approved)} />
+            <StatCard to={link('monitor', { status: 'UNDER_REVIEW' })} icon="⏸" tone="amber" label="Under review" value={num(data.totals.under_review)} sub={`${live.data?.awaiting_analyst ?? 0} awaiting analyst`} />
+            <StatCard to={link('monitor', { status: 'BLOCKED' })} icon="⛔" tone="red" label="Blocked" value={num(data.totals.blocked)} sub={moneyShort(data.totals.blocked_amount) + ' stopped'} />
+            <StatCard to={link('monitor', { flagged: '1' })} icon="🎯" tone="purple" label="Fraud attempts detected" value={num(data.totals.flagged)} sub="Initial decision Review or Blocked" />
+            <StatCard to={link('alerts')} icon="🚨" tone="red" label="Total alerts" value={num(data.totals.alerts)} sub={`${data.totals.open_alerts} open · ${data.totals.high_alerts} high`} />
+            <StatCard to={link('monitor', { sort: 'latency' })} icon="⏱" tone="blue" label="Decision latency (p95)" value={data.latency.p95_ms != null ? `${data.latency.p95_ms} ms` : '—'} sub={data.latency.p50_ms != null ? `median ${data.latency.p50_ms} ms · target ≤ 500 ms` : 'no data yet'} />
+            <StatCard to={link('alerts', { status: 'RESOLVED', resolution: 'CONFIRMED_FRAUD' })} icon="✔" tone="green" label="Confirmed fraud" value={num(data.totals.confirmed_fraud)} sub="Resolved by analysts" />
           </div>
 
           <DecisionBreakdown totals={data.totals} />
@@ -259,5 +268,30 @@ function ConfirmationsCard({ data, onOpen }) {
         </div>
       )}
     </div>
+  );
+}
+
+// The detective's starting point: each card opens that tab of the investigation queue.
+const CASE_CARDS = [
+  ['pending', 'Pending review', 'amber', '⏳', 'Temporarily blocked, waiting for a detective'],
+  ['under_investigation', 'Under investigation', 'blue', '🔍', 'Being reviewed now'],
+  ['permanently_blocked', 'Permanently blocked', 'red', '⛔', 'Fraud confirmed'],
+  ['approved', 'Approved', 'green', '✓', 'Verified legitimate, access restored'],
+];
+
+function CaseSummary({ counts }) {
+  return (
+    <section className="case-summary">
+      <div className="row-between">
+        <h2 className="section-title" style={{ margin: 0 }}>Investigations</h2>
+        <Link to="/detection/investigations" className="small">Open the queue →</Link>
+      </div>
+      <div className="grid grid-4 mt-8">
+        {CASE_CARDS.map(([view, label, tone, icon, sub]) => (
+          <StatCard key={view} to={`/detection/investigations?view=${view}`} icon={icon} tone={tone} label={label}
+                    value={counts ? num(counts[view]) : '–'} sub={sub} />
+        ))}
+      </div>
+    </section>
   );
 }

@@ -15,6 +15,11 @@ Generated from the app's URL map (`flask routes`). All paths are JSON; protected
 | GET | `/api/detection/engine` | detection.engine_overview |
 | POST | `/api/detection/engine/run` | detection.engine_run |
 | GET | `/api/detection/engine/runs/<int:run_id>` | detection.engine_run_detail |
+| GET | `/api/detection/investigations` | detection.investigation_queue |
+| GET | `/api/detection/investigations/<int:case_id>` | detection.investigation_detail |
+| POST | `/api/detection/investigations/<int:case_id>/decision` | detection.investigation_decision |
+| POST | `/api/detection/investigations/<int:case_id>/start` | detection.investigation_start |
+| GET | `/api/detection/investigations/history` | detection.investigation_history |
 | GET | `/api/detection/live` | detection.live |
 | GET | `/api/detection/receiver-blocks` | detection.receiver_blocks |
 | POST | `/api/detection/receiver-blocks/<int:block_id>/lift` | detection.lift_receiver_block |

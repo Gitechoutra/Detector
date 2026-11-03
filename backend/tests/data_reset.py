@@ -11,6 +11,10 @@ def reset_data(restore_rules=True):
     (optionally) rule weights. Users, roles, rules and the audit trail are kept."""
     statements = [
         'DELETE FROM detection_runs',
+        'SET @fs_maintenance = 1',
+        'DELETE FROM investigation_actions',
+        'DELETE FROM investigation_cases',
+        'SET @fs_maintenance = NULL',
         'DELETE FROM receiver_blocks',
         'DELETE FROM simulation_events',
         'DELETE FROM triggered_rules',

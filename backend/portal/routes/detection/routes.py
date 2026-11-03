@@ -8,7 +8,7 @@ from sqlalchemy import or_
 from portal.extensions import db
 from portal.models import (Account, Alert, DetectionRun, FraudRule, ReceiverBlock, LoginAttempt, RiskAssessment, RiskCategory, Role,
                       SecurityEvent, Transaction, TriggeredRule, User, WatchlistEntry)
-from portal.helpers import detection_engine, payment_engine
+from portal.helpers import detection_engine, investigations, payment_engine
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError, ok
 from portal.helpers.security import DETECTION, client_ip, role_required
@@ -61,6 +61,11 @@ def _filtered_transactions():
         query = query.filter(Transaction.is_simulated.is_(True))
     if request.args.get('q'):
         query = query.filter(Transaction.txn_ref.like(f"%{request.args['q'].strip()}%"))
+    if request.args.get('flagged') == '1':
+        # Fraud attempts: the engine's first decision was Review or Blocked (as counted on the overview).
+        query = query.filter(db.exists().where(
+            RiskAssessment.transaction_id == Transaction.id, RiskAssessment.assessment_type == 'INITIAL',
+            RiskAssessment.decision != 'APPROVED'))
     return query
 
 
@@ -68,7 +73,11 @@ def _filtered_transactions():
 @role_required(DETECTION)
 def transactions():
     page, size = page_args(25)
-    items, meta = paginate(_filtered_transactions().order_by(Transaction.id.desc()), page, size)
+    order = {'newest': Transaction.id.desc(), 'latency': Transaction.latency_ms.desc()}.get(
+        request.args.get('sort') or 'newest')
+    if order is None:
+        raise ApiError('Sort by newest or latency.', 422, 'VALIDATION_ERROR', {'field': 'sort'})
+    items, meta = paginate(_filtered_transactions().order_by(order, Transaction.id.desc()), page, size)
     return ok({'items': [t.to_dict() for t in items], 'meta': meta})
 
 
@@ -378,3 +387,43 @@ def lift_receiver_block(block_id):
     message = ('Block lifted. The account can receive payments again.' if block.account.status == 'ACTIVE'
                else 'Block lifted. The account stays blocked because of another active block.')
     return ok(block.to_dict(), message)
+
+
+# ── Fraud investigation queue: temporarily blocked accounts ────────────────
+
+@bp.get('/investigations')
+@role_required(DETECTION)
+def investigation_queue():
+    payment_engine.expire_confirmations()
+    page, size = page_args(20, 100)
+    return ok(investigations.list_cases(view=request.args.get('view') or 'open', q=request.args.get('q'),
+                                        sort=request.args.get('sort') or 'newest', page=page, size=size))
+
+
+@bp.get('/investigations/history')
+@role_required(DETECTION)
+def investigation_history():
+    page, size = page_args(50, 200)
+    return ok(investigations.history(page, size, request.args.get('case_id', type=int)))
+
+
+@bp.get('/investigations/<int:case_id>')
+@role_required(DETECTION)
+def investigation_detail(case_id):
+    return ok(investigations.case_detail(case_id))
+
+
+@bp.post('/investigations/<int:case_id>/start')
+@role_required(DETECTION)
+def investigation_start(case_id):
+    case = investigations.start_review(g.current_user, case_id, client_ip())
+    return ok(investigations.case_detail(case.id), f'{case.case_ref} is now under investigation.')
+
+
+@bp.post('/investigations/<int:case_id>/decision')
+@role_required(DETECTION)
+def investigation_decision(case_id):
+    data = json_body()
+    case, message = investigations.decide(g.current_user, case_id, data.get('decision'), data.get('reason'),
+                                          data.get('confirm'), client_ip())
+    return ok(investigations.case_detail(case.id), message)

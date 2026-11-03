@@ -152,9 +152,8 @@ def test_score_is_capped_at_100_and_blocks(client, app):
     detail = client.get(f"/api/detection/transactions/{data['id']}", headers=analyst).get_json()['data']
     assert {'R1', 'R4', 'R6', 'R8', 'R9'} <= {r['code'] for r in detail['rules']}
     assert sum(r['weight'] for r in detail['rules']) > 100
-    # Score 100 is in the BLOCKED band, but every flagged payment waits for its owner.
-    assert data['risk_score'] == 100 and data['decision'] == 'BLOCKED'
-    assert data['display_status'] == 'USER_CONFIRMATION_PENDING'
+    # Score 100 reaches the blocking threshold: stopped at once, nothing for the owner to answer.
+    assert data['risk_score'] == 100 and data['decision'] == 'BLOCKED' and data['status'] == 'BLOCKED'
 
 
 def test_disabled_rule_does_not_fire_and_weights_are_configurable(client):

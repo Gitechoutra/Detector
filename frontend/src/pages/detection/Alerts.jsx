@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { errorMessage, patch } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { Empty, ErrorNote, Field, Loading, Modal, PageHead, Pagination, RiskScore, RuleChips, StatusBadge } from '../../components/ui';
@@ -10,7 +10,13 @@ const TYPE_LABEL = { TRANSACTION_REVIEW: 'Review', TRANSACTION_BLOCKED: 'Blocked
 
 export default function Alerts() {
   const toast = useToast();
-  const [filters, setFilters] = useState({ status: '', severity: '', alert_type: '', source: '', page: 1 });
+  const [params] = useSearchParams();
+  // Filters can arrive in the URL, e.g. from an overview card (?status=RESOLVED&resolution=CONFIRMED_FRAUD).
+  const [filters, setFilters] = useState(() => {
+    const base = { status: '', severity: '', alert_type: '', resolution: '', source: '', date_from: '', date_to: '' };
+    return { ...base, ...Object.fromEntries([...params].filter(([k]) => k in base)), page: 1 };
+  });
+  const fromOverview = [...params].length > 0;
   const { data, error, loading, reload } = useApi('/alerts', filters, { interval: 3000 });
   const [open, setOpen] = useState(null);
   const [notes, setNotes] = useState('');
@@ -35,6 +41,7 @@ export default function Alerts() {
   const c = data?.counts || {};
   return (
     <>
+      {fromOverview && <Link to="/detection" className="back-link">← Back to overview</Link>}
       <PageHead title="Alerts & cases" subtitle="Assign, investigate, annotate and close alerts as confirmed fraud or false positive.">
         <span className="badge b-red">{c.OPEN || 0} open</span>
         <span className="badge b-amber">{c.INVESTIGATING || 0} investigating</span>
@@ -52,6 +59,11 @@ export default function Alerts() {
             <option value="">Any type</option><option value="TRANSACTION_REVIEW">Transaction review</option>
             <option value="TRANSACTION_BLOCKED">Transaction blocked</option><option value="SECURITY">Security</option>
           </select>
+          <select className="input input-sm" value={filters.resolution} onChange={set('resolution')}>
+            <option value="">Any outcome</option><option value="CONFIRMED_FRAUD">Confirmed fraud</option><option value="FALSE_POSITIVE">False positive</option>
+          </select>
+          <input type="date" className="input input-sm" value={filters.date_from} onChange={set('date_from')} aria-label="From date" />
+          <input type="date" className="input input-sm" value={filters.date_to} onChange={set('date_to')} aria-label="To date" />
           <select className="input input-sm" value={filters.source} onChange={set('source')}>
             <option value="">Manual + simulated</option><option value="manual">Manual</option><option value="simulated">Simulated</option>
           </select>

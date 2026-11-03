@@ -1,5 +1,9 @@
-backend/.env
+# Environment files: never commit (templates are allowed)
+.env
+.env.*
+!.env.example
 backend/.venv/
+backend/venv/
 **/__pycache__/
 *.pyc
 .pytest_cache/
