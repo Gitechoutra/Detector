@@ -45,15 +45,15 @@ ATTACKER_PREFIX = 'sim-atk-'
 DEVICE_ID_RE = re.compile(r'^[A-Za-z0-9._:-]{3,40}$')
 DEVICE_TYPES = ('Android phone', 'iPhone', 'Windows PC', 'MacBook', 'Linux PC', 'Tablet')   # suggestions only
 SCENARIOS = (
-    ('R1', 'R1 · High transaction amount'),
-    ('R2', 'R2 · Transaction velocity'),
-    ('R3', 'R3 · Impossible travel'),
-    ('R4', 'R4 · New device + high amount'),
-    ('R5', 'R5 · Odd-hour transaction'),
-    ('R6', 'R6 · Watch-listed receiver'),
-    ('R7', 'R7 · Structuring below the reporting limit'),
-    ('R8', 'R8 · Dormant account reactivation'),
-    ('R9', 'R9 · Suspicious login / account takeover'),
+    ('R1', 'High transaction amount'),
+    ('R2', 'Transaction velocity'),
+    ('R3', 'Impossible travel'),
+    ('R4', 'New device + high amount'),
+    ('R5', 'Odd-hour transaction'),
+    ('R6', 'Watch-listed receiver'),
+    ('R7', 'Structuring below the reporting limit'),
+    ('R8', 'Dormant account reactivation'),
+    ('R9', 'Suspicious login / account takeover'),
     ('ATO', 'Account takeover – combined attack'),
     ('CUSTOM', 'Custom attempt'),
 )
@@ -127,14 +127,19 @@ CONTEXT_FIELDS = ('city', 'target_location', 'device_type', 'device_id', 'ip_add
                   'demo_time')
 
 
-def _no_context(data, victim):
+def _no_context(data, victim, frauder, session_location_id=None):
     """No attempt context entered (the console no longer asks for one): the
-    attempt uses the victim's own home city and registered device, if any."""
+    attempt uses the victim's registered device, if any, from the city the
+    Frauder chose when signing in – or, if they kept their own home city, from
+    the victim's home city."""
     scenario = (data.get('scenario') or '').strip().upper() or None
     if scenario and scenario not in dict(SCENARIOS):
         raise _invalid('scenario', 'Choose a fraud scenario from the list.')
-    return {'source': 'FRAUDER', 'city': victim.home_location.city if victim.home_location else None,
-            'location_id': victim.home_location_id, 'scenario': scenario,
+    chosen = (db.session.get(Location, int(session_location_id))
+              if session_location_id and int(session_location_id) != frauder.home_location_id else None)
+    location = chosen or victim.home_location
+    return {'source': 'FRAUDER', 'city': location.city if location else None,
+            'location_id': location.id if location else None, 'scenario': scenario,
             'scenario_name': dict(SCENARIOS).get(scenario)}
 
 
@@ -396,11 +401,12 @@ def otp_attempt(frauder, data):
     return {'message': f'Wrong OTP recorded ({count} in the last hour).', 'otp_failures_last_hour': count}
 
 
-def transfer(frauder, data, idempotency_key):
+def transfer(frauder, data, idempotency_key, session_location_id=None):
     victim = _victim(data.get('victim_id'))
     receiver = _receiver(data.get('receiver_id'), victim)
     with_context = any(data.get(k) not in (None, '', False) for k in CONTEXT_FIELDS)
-    details = _attacker_details(data) if with_context else _no_context(data, victim)
+    details = (_attacker_details(data) if with_context
+               else _no_context(data, victim, frauder, session_location_id))
     txn_time = _demo_time(data.get('demo_time'))
     if txn_time:
         details['demo_time'] = txn_time.strftime('%H:%M')

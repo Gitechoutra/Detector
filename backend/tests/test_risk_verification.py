@@ -334,6 +334,25 @@ def test_frauder_transfer_without_attempt_context(client, app, fr):
     assert balance(app, 'rahul@demo.bank') == Decimal('250000')
 
 
+def test_frauder_transfer_uses_the_city_chosen_at_sign_in(client, app, fr):
+    """Signed in from another city, the Frauder's attempts come from that city
+    (still on the victim's registered device). Keeping "My home city" leaves the
+    victim's home city, as above."""
+    from portal.models import Location
+    with app.app_context():
+        hyderabad = Location.query.filter_by(city='Hyderabad').one().id
+        db.session.remove()
+    elsewhere = login(client, 'frauder@demo.bank', location_id=hyderabad)
+    res = client.post('/api/frauder/transfer', headers=elsewhere, json={
+        'victim_id': fr.ids['rahul'], 'receiver_id': fr.ids['amit'], 'amount': 1500})
+    assert res.status_code == 201, res.get_json()
+    data = res.get_json()['data']
+    assert data['city'] == 'Hyderabad' and data['device']['is_trusted'] is True
+    with app.app_context():
+        assert db.session.get(Transaction, data['id']).simulated_details['city'] == 'Hyderabad'
+        db.session.remove()
+
+
 # ── Notifications: "Mark all read" clears the list ─────────────────────────
 
 def test_mark_all_read_clears_the_notification_list(client, app):

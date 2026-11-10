@@ -1,6 +1,7 @@
 """Manual Frauder console. Every endpoint is one deliberate action by the
 presenter; nothing here runs on a timer or generates activity on its own."""
 from flask import g, request
+from flask_jwt_extended import get_jwt
 
 from portal.helpers import frauder, payment_engine
 from portal.helpers.responses import ApiError, ok
@@ -53,7 +54,8 @@ def otp_attempt():
 @role_required(FRAUDER)
 def transfer():
     key = (request.headers.get('Idempotency-Key') or '').strip()[:64] or None
-    result, replayed = frauder.transfer(g.current_user, json_body(), key)
+    # The city chosen on the login page travels in the session token.
+    result, replayed = frauder.transfer(g.current_user, json_body(), key, get_jwt().get('location_id'))
     result['replayed'] = replayed
     message = 'Duplicate submission – showing the original result.' if replayed else OUTCOME_MESSAGES.get(result['status'])
     return ok(result, message, 200 if replayed else 201)
