@@ -30,17 +30,9 @@ class Config:
         'pool_recycle': 1800,
         'pool_size': 10,
         'max_overflow': 20,
-        # The payment, OTP and investigation code locks a row (SELECT … FOR UPDATE) and
-        # then reads it. Under MySQL's default REPEATABLE READ that read returns the
-        # transaction's first snapshot, not the row just locked, so parallel requests
-        # double-spend. READ COMMITTED makes every statement see the latest commit.
-        'isolation_level': 'READ COMMITTED',
     }
 
     CORS_ORIGINS = [o.strip() for o in os.environ.get('CORS_ORIGINS', 'http://localhost:5173').split(',')]
-    # Only behind one trusted reverse proxy: take the client IP it appends to X-Forwarded-For.
-    # Off by default, because any client can send that header and dodge IP watchlisting.
-    TRUST_PROXY = _flag('TRUST_PROXY')
     JSON_SORT_KEYS = False
     # Where the dummy-account credentials (SEED_<KEY>_EMAIL / _PASSWORD) are read
     # from: None = the environment (.env), falling back to .env.example.

@@ -1,4 +1,4 @@
-import { lazy, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { dashboardHref } from './roles';
@@ -6,30 +6,27 @@ import Layout from './components/Layout';
 import TabbedPage from './components/TabbedPage';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
+import Notifications from './pages/Notifications';
 import Register from './pages/Register';
-
-// Dashboard pages load on demand, so the charts (recharts) and QR libraries are
-// only downloaded by the role that uses them, not on the landing or login page.
-const Notifications = lazy(() => import('./pages/Notifications'));
-const Alerts = lazy(() => import('./pages/detection/Alerts'));
-const DetectionEngine = lazy(() => import('./pages/detection/DetectionEngine'));
-const DetectionOverview = lazy(() => import('./pages/detection/Overview'));
-const Investigation = lazy(() => import('./pages/detection/Investigation'));
-const InvestigationCase = lazy(() => import('./pages/detection/InvestigationCase'));
-const InvestigationQueue = lazy(() => import('./pages/detection/InvestigationQueue'));
-const Monitor = lazy(() => import('./pages/detection/Monitor'));
-const Rules = lazy(() => import('./pages/detection/Rules'));
-const SecurityAudit = lazy(() => import('./pages/detection/SecurityAudit'));
-const Watchlist = lazy(() => import('./pages/detection/Watchlist'));
-const FrauderConsole = lazy(() => import('./pages/frauder/FrauderConsole'));
-const FrauderHistory = lazy(() => import('./pages/frauder/FrauderHistory'));
-const FraudRecords = lazy(() => import('./pages/frauder/FraudRecords'));
-const IncomingPayments = lazy(() => import('./pages/receiver/IncomingPayments'));
-const MyQR = lazy(() => import('./pages/receiver/MyQR'));
-const SendMoney = lazy(() => import('./pages/user/SendMoney'));
-const UserDashboard = lazy(() => import('./pages/user/UserDashboard'));
-const UserSecurity = lazy(() => import('./pages/user/UserSecurity'));
-const UserActivity = lazy(() => import('./pages/user/UserActivity'));
+import Alerts from './pages/detection/Alerts';
+import DetectionEngine from './pages/detection/DetectionEngine';
+import DetectionOverview from './pages/detection/Overview';
+import Investigation from './pages/detection/Investigation';
+import InvestigationCase from './pages/detection/InvestigationCase';
+import InvestigationQueue from './pages/detection/InvestigationQueue';
+import Monitor from './pages/detection/Monitor';
+import Rules from './pages/detection/Rules';
+import SecurityAudit from './pages/detection/SecurityAudit';
+import Watchlist from './pages/detection/Watchlist';
+import FrauderConsole from './pages/frauder/FrauderConsole';
+import FrauderHistory from './pages/frauder/FrauderHistory';
+import FraudRecords from './pages/frauder/FraudRecords';
+import IncomingPayments from './pages/receiver/IncomingPayments';
+import MyQR from './pages/receiver/MyQR';
+import SendMoney from './pages/user/SendMoney';
+import UserDashboard from './pages/user/UserDashboard';
+import UserSecurity from './pages/user/UserSecurity';
+import UserActivity from './pages/user/UserActivity';
 
 // Not signed in, or signed in as another role: go through login for this role
 // and come back to the exact page that was asked for.

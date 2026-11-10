@@ -428,14 +428,10 @@ Running `flask db upgrade` again, or on a database that already has these tables
 ```bash
 cd backend
 .venv\Scripts\activate
-pytest -q                                   # API, engine and database tests (tests/)
-
-pip install -r requirements-dev.txt         # once: Playwright and pyflakes
-python -m playwright install chromium       # once: the browser
-python -m pytest e2e -q                     # browser tests (e2e/), see below
+pytest -q
 ```
 
-The API tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
+The 177 tests never touch `bank`. While they run they use a temporary `bank_test` database on the same
 server, named automatically from `DATABASE_URL`. Delete it afterwards if you only want one database. They cover:
 - all four logins, account lockout and role-based access
 - every rule firing individually
@@ -453,17 +449,6 @@ server, named automatically from `DATABASE_URL`. Delete it afterwards if you onl
 - Demo Mode is gone (its endpoints return 404); the automatic simulation endpoints are gone
 - the audit hash chain and immutability
 - re-running migrations without duplicates or data loss
-- `test_qa_*.py`: every endpoint fuzzed with malformed JSON, wrong types, boundary and injection values (no 500s);
-  the full role × endpoint access matrix and IDOR checks; parallel payments, answers, OTPs and detective decisions
-  (no double spend, no double decision); every rule at, just below and just above its threshold; investigation
-  edge cases; login rate limiting and a spoofed `X-Forwarded-For`
-
-**Browser tests** (`e2e/`, Playwright) start their own backend (port 5055) and Vite server (port 3055) against a
-separate `<name>_e2e` database built by the migrations, so neither your data nor a running dev server is touched.
-They open every page of every role at seven screen sizes (1920×1080 down to 360×800) and fail on console errors,
-failed or 5xx API calls and horizontal scrolling, then click through login/logout, YES + OTP, NO (dashboard and
-notifications), double-click send, and a detective approving and permanently blocking an account. Screenshots of
-failures and both server logs go to `e2e/artifacts/`.
 
 **Manual check (viva script):**
 1. Rahul sends ₹5,000 to `priya@fsbank`: SUCCESSFUL (no rule fired).

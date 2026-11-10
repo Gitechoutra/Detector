@@ -390,7 +390,7 @@ def test_manual_details_are_stored_unchanged_and_used_by_rules(client, app, fr):
         db.session.remove()
     assert sim == {'source': 'SIMULATED', 'verified': False, 'city': 'Delhi', 'target_location': 'Karol Bagh',
                    'use_registered_device': False, 'device_type': 'Android phone', 'device_id': 'ATK-77',
-                   'ip_address': '49.36.12.8', 'scenario': 'R3', 'scenario_name': 'R3 · Impossible travel'}
+                   'ip_address': '49.36.12.8', 'scenario': 'R3', 'scenario_name': 'Impossible travel'}
     assert result['ip_address'] == '49.36.12.8' and result['city'] == 'Delhi'
     assert result['device']['device_name'] == 'Android phone' and result['device']['is_trusted'] is False
 

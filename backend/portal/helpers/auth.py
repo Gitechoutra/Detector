@@ -17,22 +17,12 @@ from portal.helpers.helpers import notify, raise_alert, security_event, setting
 DASHBOARDS = {'USER': '/user', 'RECEIVER': '/user', 'DETECTION': '/detection', 'FRAUDER': '/frauder'}
 
 
-def parse_location_id(location_id):
-    """A client-supplied city id: None when absent, otherwise an existing location's id."""
-    if location_id is None or location_id == '':
-        return None
-    if isinstance(location_id, bool) or not isinstance(location_id, (int, str)) \
-            or not str(location_id).strip().isdigit() or len(str(location_id).strip()) > 9:
-        raise ApiError('Unknown location.', 422, 'VALIDATION_ERROR', {'field': 'location_id'})
-    if not db.session.get(Location, int(location_id)):
-        raise ApiError('Unknown location.', 422, 'VALIDATION_ERROR', {'field': 'location_id'})
-    return int(location_id)
-
-
 def resolve_location_id(location_id, user):
-    if location_id in (None, '', 0, '0'):
-        return user.home_location_id if user else None
-    return parse_location_id(location_id)
+    if location_id:
+        if db.session.get(Location, int(location_id)):
+            return int(location_id)
+        raise ApiError('Unknown location.', 422, 'VALIDATION_ERROR', {'field': 'location_id'})
+    return user.home_location_id if user else None
 
 
 def upsert_device(user, fingerprint, device_name, ip, location_id, at=None, trust_first=True):
@@ -132,30 +122,10 @@ def register_attempt(user, email, success, fingerprint, device_name, ip, locatio
     return device
 
 
-# Per-account locking stops guessing one password; this stops one address trying
-# passwords across many accounts (credential stuffing).
-IP_MAX_FAILURES, IP_WINDOW_MINUTES = 20, 15
-
-
-def _throttle(ip, at):
-    recent = (LoginAttempt.query.filter(LoginAttempt.ip_address == ip, LoginAttempt.success.is_(False),
-                                        LoginAttempt.is_simulated.is_(False),
-                                        LoginAttempt.created_at >= at - timedelta(minutes=IP_WINDOW_MINUTES))
-              .count())
-    if recent >= IP_MAX_FAILURES:
-        raise ApiError(f'Too many failed sign-ins from your network. Try again in {IP_WINDOW_MINUTES} minutes.',
-                       429, 'RATE_LIMITED')
-
-
 def login(email, password, fingerprint, device_name, ip, location_id=None):
     at = now()
-    _throttle(ip, at)
     user = User.query.filter(func.lower(User.email) == email.lower()).first()
     if user is None or user.is_simulated:
-        try:        # still recorded when the location is junk: the attempt matters more than the city
-            location_id = resolve_location_id(location_id, None)
-        except ApiError:
-            location_id = None
         register_attempt(None, email, False, fingerprint, device_name, ip, location_id, 'UNKNOWN_USER')
         db.session.commit()
         raise ApiError('Invalid email or password.', 401, 'INVALID_CREDENTIALS')
@@ -236,15 +206,11 @@ def register(full_name, email, phone, password, role_code, location_id, ip):
     if User.query.filter(func.lower(User.email) == email).first():
         raise ApiError('An account with this email already exists. Please sign in.', 409, 'EMAIL_TAKEN',
                        {'field': 'email'})
-    try:
-        location_id = parse_location_id(location_id)
-    except ApiError:
-        location_id = None
-    if location_id is None:
+    if not db.session.get(Location, int(location_id or 0)):
         raise ApiError('Choose your home city.', 422, 'VALIDATION_ERROR', {'field': 'location_id'})
 
     user = User(role_id=Role.query.filter_by(code=role_code).first().id, full_name=full_name, email=email,
-                phone=phone, password_hash=generate_password_hash(password), home_location_id=location_id)
+                phone=phone, password_hash=generate_password_hash(password), home_location_id=int(location_id))
     db.session.add(user)
     db.session.flush()
     # Simulated bank: every customer gets a welcome balance so they can try payments straight away.

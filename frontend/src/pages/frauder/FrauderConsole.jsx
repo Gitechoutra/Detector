@@ -133,7 +133,8 @@ export default function FrauderConsole() {
 
       <div className="notice notice-info">
         🔒 Controlled impersonation of designated accounts only. You never see a password and cannot change balances,
-        profiles or rules. Each attempt is made from the target account's own home city and registered device.
+        profiles or rules. Each attempt uses the target account's registered device, from the city you chose when
+        signing in (or the target's own home city if you kept “My home city”).
       </div>
 
       <div className="grid grid-main mt-24">

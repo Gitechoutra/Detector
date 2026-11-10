@@ -13,17 +13,6 @@ def json_body():
     return data
 
 
-def as_text(value):
-    """A client value as text for optional-field parsing: numbers become their digits,
-    anything else that is not a string (lists, objects, booleans) becomes ''. So
-    `as_text(x).strip()` never crashes and the caller's own validation reports it."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
-    return ''
-
-
 def require_str(data, field, max_len=255, label=None, required=True):
     value = data.get(field)
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -44,26 +33,20 @@ def parse_amount(value, minimum=Decimal('1'), maximum=Decimal('1000000')):
         amount = Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         raise ApiError('Enter a valid amount.', 422, 'VALIDATION_ERROR', {'field': 'amount'})
-    if not amount.is_finite():
-        raise ApiError('Enter a valid amount.', 422, 'VALIDATION_ERROR', {'field': 'amount'})
-    # Range before precision: quantize() cannot handle numbers beyond 28 digits.
+    if not amount.is_finite() or amount != amount.quantize(Decimal('0.01')):
+        raise ApiError('Amount can have at most 2 decimal places.', 422, 'VALIDATION_ERROR', {'field': 'amount'})
     if amount < minimum:
         raise ApiError(f'Minimum amount is ₹{minimum}.', 422, 'VALIDATION_ERROR', {'field': 'amount'})
     if amount > maximum:
         raise ApiError(f'Maximum amount per transaction is ₹{maximum:,.0f}.', 422,
                        'VALIDATION_ERROR', {'field': 'amount'})
-    if amount != amount.quantize(Decimal('0.01')):
-        raise ApiError('Amount can have at most 2 decimal places.', 422, 'VALIDATION_ERROR', {'field': 'amount'})
     return amount
 
 
 def parse_int(value, field, minimum=None, maximum=None):
-    # int() would quietly turn true into 1 and 1.5 into 1.
-    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
-        raise ApiError(f'{field} must be a whole number.', 422, 'VALIDATION_ERROR', {'field': field})
     try:
         number = int(value)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError):
         raise ApiError(f'{field} must be a whole number.', 422, 'VALIDATION_ERROR', {'field': field})
     if minimum is not None and number < minimum or maximum is not None and number > maximum:
         raise ApiError(f'{field} must be between {minimum} and {maximum}.', 422,

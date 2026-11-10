@@ -1,5 +1,0 @@
-# Development and test tools (not needed to run the app)
--r requirements.txt
-pyflakes
-playwright
-requests

@@ -6,4 +6,3 @@ __pycache__/
 reports/
 logs/*.log*
 venv/
-migrations/

@@ -1,9 +1,9 @@
-import { Suspense, useState } from 'react';
+import { useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useApi } from '../hooks';
 import Icon from './Icon';
-import { Avatar, Loading } from './ui';
+import { Avatar } from './ui';
 
 // [link, icon, label, paths that keep it highlighted, badge count]. Related screens share one entry
 // and appear as tabs on its page, so every feature stays one click away.
@@ -100,7 +100,7 @@ export default function Layout() {
             <button className="btn btn-ghost btn-sm" onClick={doLogout} title="Log out"><Icon name="logout" size={16} /><span className="hide-sm">Log out</span></button>
           </div>
         </header>
-        <main className="content"><Suspense fallback={<Loading />}><Outlet /></Suspense></main>
+        <main className="content"><Outlet /></main>
       </div>
     </div>
   );

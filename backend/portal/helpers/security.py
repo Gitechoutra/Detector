@@ -35,6 +35,5 @@ def role_required(*roles):
 
 
 def client_ip():
-    """The connecting address. X-Forwarded-For is client-controlled, so it is only
-    honoured through ProxyFix when TRUST_PROXY is set (see create_app)."""
-    return request.remote_addr or '0.0.0.0'
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return (forwarded.split(',')[0].strip() if forwarded else request.remote_addr) or '0.0.0.0'

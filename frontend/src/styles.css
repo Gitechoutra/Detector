@@ -333,10 +333,6 @@ table.table { width: 100%; border-collapse: collapse; }
 @media (max-width: 560px) {
   .security-alert-actions { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 110px 1fr; }
-  /* Long labels (e.g. "NO, I DID NOT INITIATE THIS TRANSACTION") wrap instead of
-     pushing the page sideways on phones. Short labels still fit on one line. */
-  .btn { white-space: normal; text-align: center; max-width: 100%; }
-  .security-alert-actions .btn { min-width: 0; }
 }
 
 /* Triggered rules on the "Security Verification Required" card */

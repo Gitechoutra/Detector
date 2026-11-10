@@ -24,6 +24,7 @@ import time
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -33,7 +34,6 @@ from portal.models import (Account, Alert, Device, InvestigationCase, Notificati
 from portal.models.receiver_blocks import snapshot
 from portal.helpers.audit import write_audit
 from portal.helpers.responses import ApiError
-from portal.helpers.validators import as_text
 from portal.helpers import fraud_engine, investigations
 from portal.helpers.helpers import inr, notify, raise_alert, security_event, setting
 
@@ -56,18 +56,18 @@ def parse_qr_payload(payload):
 
 def resolve_receiver(method, data):
     if method == 'UPI':
-        upi = as_text(data.get('upi_id')).strip().lower()
+        upi = (data.get('upi_id') or '').strip().lower()
         if not upi:
             raise ApiError('Enter the receiver UPI ID.', 422, 'VALIDATION_ERROR', {'field': 'upi_id'})
         account = Account.query.filter_by(upi_id=upi).first()
     elif method == 'QR':
-        upi, token = parse_qr_payload(as_text(data.get('qr_payload')))
+        upi, token = parse_qr_payload(data.get('qr_payload') or '')
         account = Account.query.filter_by(upi_id=upi.lower()).first()
         if account and token and token != account.qr_token:
             raise ApiError('This QR code has been replaced or is not genuine.', 422, 'INVALID_QR')
     elif method == 'BANK_TRANSFER':
-        number = as_text(data.get('account_number')).strip()
-        ifsc = as_text(data.get('ifsc')).strip().upper()
+        number = (data.get('account_number') or '').strip()
+        ifsc = (data.get('ifsc') or '').strip().upper()
         if not number or not ifsc:
             raise ApiError('Enter the account number and IFSC.', 422, 'VALIDATION_ERROR')
         account = Account.query.filter_by(account_number=number).first()
@@ -93,10 +93,9 @@ def resolve_receiver(method, data):
 def _lock_accounts(*account_ids):
     """Row-locks accounts in id order (consistent order prevents deadlocks)."""
     ids = sorted(set(account_ids))
-    # A locking read returns the current row whatever the isolation level.
-    locked = (Account.query.filter(Account.id.in_(ids)).order_by(Account.id)
-              .with_for_update().populate_existing().all())
-    return {a.id: a for a in locked}
+    db.session.execute(text('SELECT id FROM accounts WHERE id IN :ids ORDER BY id FOR UPDATE')
+                       .bindparams(bindparam('ids', expanding=True)), {'ids': ids})
+    return {a.id: a for a in Account.query.filter(Account.id.in_(ids)).populate_existing().all()}
 
 
 # Plain-language reason per rule, used to explain REVIEW and BLOCKED decisions.
@@ -142,7 +141,8 @@ def _settle(txn, at=None, reason=None):
     # Lock the payment row first: whoever holds it decides whether money moves,
     # so a duplicate release can never debit twice.
     db.session.flush()
-    db.session.refresh(txn, ['status'], with_for_update=True)
+    db.session.execute(text('SELECT id FROM transactions WHERE id = :id FOR UPDATE'), {'id': txn.id})
+    db.session.refresh(txn, ['status'])
     if txn.status == 'COMPLETED':
         return False
     accounts = _lock_accounts(txn.sender_account_id, txn.receiver_account_id)
@@ -434,7 +434,7 @@ def confirm_verification(user, txn_id, otp, password=None, ip=None):
         raise ApiError('This OTP has expired, so the payment was not authorized. Request a new OTP.', 410,
                        'OTP_EXPIRED')
 
-    otp = as_text(otp).strip()
+    otp = (otp or '').strip()
     if not (len(otp) == 6 and otp.isdigit() and check_password_hash(challenge.otp_hash, otp)):
         challenge.attempts += 1
         security_event(user.id, 'OTP_FAILED', f'Wrong OTP while verifying {txn.txn_ref}', 'MEDIUM',
@@ -516,7 +516,8 @@ def _open_confirmation(txn):
 def _lock_txn(txn_id):
     """Row-locks the payment and reloads it, so concurrent answers queue up and
     only the first one finds the request still PENDING."""
-    return db.session.get(Transaction, txn_id, populate_existing=True, with_for_update=True)
+    db.session.execute(text('SELECT id FROM transactions WHERE id = :id FOR UPDATE'), {'id': txn_id})
+    return db.session.get(Transaction, txn_id, populate_existing=True)
 
 
 def _close_security_notice(txn):
@@ -572,7 +573,7 @@ def expire_confirmations():
 def respond_to_confirmation(user, txn_id, response, ip=None):
     """The owner's YES/NO. Who is answering comes from the login session, never
     from the request body, and the row lock makes each answer count once."""
-    response = as_text(response).strip().upper()
+    response = (response or '').strip().upper()
     if response not in ('YES', 'NO'):
         raise ApiError('Answer YES or NO.', 422, 'VALIDATION_ERROR', {'field': 'response'})
     txn = _lock_txn(txn_id)
@@ -793,7 +794,7 @@ def lift_receiver_block(analyst, block_id, reason, ip=None):
         # Lifting a block is an approval of its investigation case (recorded and audited there).
         investigations.decide(analyst, case.id, 'APPROVE', reason, True, ip)
         return db.session.get(ReceiverBlock, block_id, populate_existing=True)
-    reason = as_text(reason).strip()
+    reason = (reason or '').strip()
     if len(reason) < 5:
         raise ApiError('Give a reason for lifting the block (at least 5 characters).', 422, 'VALIDATION_ERROR',
                        {'field': 'reason'})

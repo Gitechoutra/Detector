@@ -1,6 +1,5 @@
-import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { InTabs, Loading, PageHead } from './ui';
+import { InTabs, PageHead } from './ui';
 
 /** Related screens shown as tabs under one heading. Each tab keeps its own URL. */
 export default function TabbedPage({ title, subtitle, tabs }) {
@@ -8,7 +7,7 @@ export default function TabbedPage({ title, subtitle, tabs }) {
     <>
       <PageHead title={title} subtitle={subtitle} />
       <PageTabs tabs={tabs} />
-      <InTabs.Provider value><Suspense fallback={<Loading />}><Outlet /></Suspense></InTabs.Provider>
+      <InTabs.Provider value><Outlet /></InTabs.Provider>
     </>
   );
 }

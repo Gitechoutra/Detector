@@ -29,7 +29,7 @@ from portal.helpers.helpers import security_event, setting
 from portal.helpers.fraud_engine import band_floor
 from portal.helpers.payment_engine import expire_confirmations, hard_block_rules, send_money
 from portal.helpers.responses import ApiError
-from portal.helpers.validators import as_text, parse_amount
+from portal.helpers.validators import parse_amount
 from portal.models import (Account, Alert, Device, Location, LoginAttempt, RiskAssessment, SecurityEvent,
                            InvestigationAction, InvestigationCase, ReceiverBlock, Transaction, User, WatchlistEntry,
                            money, now)
@@ -45,15 +45,15 @@ ATTACKER_PREFIX = 'sim-atk-'
 DEVICE_ID_RE = re.compile(r'^[A-Za-z0-9._:-]{3,40}$')
 DEVICE_TYPES = ('Android phone', 'iPhone', 'Windows PC', 'MacBook', 'Linux PC', 'Tablet')   # suggestions only
 SCENARIOS = (
-    ('R1', 'R1 · High transaction amount'),
-    ('R2', 'R2 · Transaction velocity'),
-    ('R3', 'R3 · Impossible travel'),
-    ('R4', 'R4 · New device + high amount'),
-    ('R5', 'R5 · Odd-hour transaction'),
-    ('R6', 'R6 · Watch-listed receiver'),
-    ('R7', 'R7 · Structuring below the reporting limit'),
-    ('R8', 'R8 · Dormant account reactivation'),
-    ('R9', 'R9 · Suspicious login / account takeover'),
+    ('R1', 'High transaction amount'),
+    ('R2', 'Transaction velocity'),
+    ('R3', 'Impossible travel'),
+    ('R4', 'New device + high amount'),
+    ('R5', 'Odd-hour transaction'),
+    ('R6', 'Watch-listed receiver'),
+    ('R7', 'Structuring below the reporting limit'),
+    ('R8', 'Dormant account reactivation'),
+    ('R9', 'Suspicious login / account takeover'),
     ('ATO', 'Account takeover – combined attack'),
     ('CUSTOM', 'Custom attempt'),
 )
@@ -84,7 +84,7 @@ def _invalid(field, message):
 def _attacker_details(data, for_login=False):
     """Validates the values the presenter typed and returns them as the
     SIMULATED record stored with the attempt."""
-    city_name = as_text(data.get('city')).strip()
+    city_name = (data.get('city') or '').strip()
     if not city_name:
         raise _invalid('city', 'Enter the target city.')
     location = Location.query.filter(func.lower(Location.city) == city_name.lower()).first()
@@ -94,8 +94,8 @@ def _attacker_details(data, for_login=False):
                                f'{cities}.')
 
     registered = bool(data.get('use_registered_device')) and not for_login
-    device_type = as_text(data.get('device_type')).strip()
-    device_id = as_text(data.get('device_id')).strip()
+    device_type = (data.get('device_type') or '').strip()
+    device_id = (data.get('device_id') or '').strip()
     if not registered:
         if not device_type or len(device_type) > 60:
             raise _invalid('device_type', 'Enter the device type (up to 60 characters), e.g. Android phone.')
@@ -103,14 +103,14 @@ def _attacker_details(data, for_login=False):
             raise _invalid('device_id', 'Device ID: 3–40 letters, digits or . _ : - (e.g. ATK-PHONE-01).')
 
     try:
-        ip = str(ipaddress.ip_address(as_text(data.get('ip_address')).strip()))
+        ip = str(ipaddress.ip_address((data.get('ip_address') or '').strip()))
     except ValueError:
         raise _invalid('ip_address', 'Enter a valid IPv4 or IPv6 address, e.g. 203.0.113.25.')
 
-    target_location = as_text(data.get('target_location')).strip()
+    target_location = (data.get('target_location') or '').strip()
     if len(target_location) > 120:
         raise _invalid('target_location', 'Target location can be at most 120 characters.')
-    scenario = as_text(data.get('scenario')).strip().upper() or None
+    scenario = (data.get('scenario') or '').strip().upper() or None
     if scenario and scenario not in dict(SCENARIOS):
         raise _invalid('scenario', 'Choose a fraud scenario from the list.')
 
@@ -127,14 +127,19 @@ CONTEXT_FIELDS = ('city', 'target_location', 'device_type', 'device_id', 'ip_add
                   'demo_time')
 
 
-def _no_context(data, victim):
+def _no_context(data, victim, frauder, session_location_id=None):
     """No attempt context entered (the console no longer asks for one): the
-    attempt uses the victim's own home city and registered device, if any."""
-    scenario = as_text(data.get('scenario')).strip().upper() or None
+    attempt uses the victim's registered device, if any, from the city the
+    Frauder chose when signing in – or, if they kept their own home city, from
+    the victim's home city."""
+    scenario = (data.get('scenario') or '').strip().upper() or None
     if scenario and scenario not in dict(SCENARIOS):
         raise _invalid('scenario', 'Choose a fraud scenario from the list.')
-    return {'source': 'FRAUDER', 'city': victim.home_location.city if victim.home_location else None,
-            'location_id': victim.home_location_id, 'scenario': scenario,
+    chosen = (db.session.get(Location, int(session_location_id))
+              if session_location_id and int(session_location_id) != frauder.home_location_id else None)
+    location = chosen or victim.home_location
+    return {'source': 'FRAUDER', 'city': location.city if location else None,
+            'location_id': location.id if location else None, 'scenario': scenario,
             'scenario_name': dict(SCENARIOS).get(scenario)}
 
 
@@ -346,7 +351,7 @@ def attempts(limit=40):
 
 def login_attempt(frauder, data):
     victim = _victim(data.get('victim_id'))
-    outcome = as_text(data.get('outcome')).upper()
+    outcome = (data.get('outcome') or '').upper()
     if outcome not in ('WRONG_PASSWORD', 'STOLEN_PASSWORD'):
         raise ApiError('Choose "wrong password" or "stolen password".', 422, 'VALIDATION_ERROR')
     details = _attacker_details(data, for_login=True)
@@ -382,7 +387,7 @@ def login_attempt(frauder, data):
 def otp_attempt(frauder, data):
     victim = _victim(data.get('victim_id'))
     ip = None
-    if as_text(data.get('ip_address')).strip():
+    if (data.get('ip_address') or '').strip():
         try:
             ip = str(ipaddress.ip_address(data['ip_address'].strip()))
         except ValueError:
@@ -396,11 +401,12 @@ def otp_attempt(frauder, data):
     return {'message': f'Wrong OTP recorded ({count} in the last hour).', 'otp_failures_last_hour': count}
 
 
-def transfer(frauder, data, idempotency_key):
+def transfer(frauder, data, idempotency_key, session_location_id=None):
     victim = _victim(data.get('victim_id'))
     receiver = _receiver(data.get('receiver_id'), victim)
     with_context = any(data.get(k) not in (None, '', False) for k in CONTEXT_FIELDS)
-    details = _attacker_details(data) if with_context else _no_context(data, victim)
+    details = (_attacker_details(data) if with_context
+               else _no_context(data, victim, frauder, session_location_id))
     txn_time = _demo_time(data.get('demo_time'))
     if txn_time:
         details['demo_time'] = txn_time.strftime('%H:%M')
